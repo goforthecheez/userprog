@@ -18,6 +18,12 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 
+struct arguments
+  {
+    char *argv[128];
+    int argc;
+  };
+
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
 
@@ -40,8 +46,13 @@ process_execute (const char *cmdline)
 
   /* Create a new thread to execute FILE_NAME. */
   tid = thread_create (cmdline, PRI_DEFAULT, start_process, fn_copy);
+  printf ("after thread_create\n");
   if (tid == TID_ERROR)
-    palloc_free_page (fn_copy); 
+    {
+      palloc_free_page (fn_copy);
+      printf ("inside");
+    }
+  printf ("before returning from process_execute\n");
   return tid;
 }
 
@@ -50,82 +61,6 @@ process_execute (const char *cmdline)
 static void
 start_process (void *file_name_)
 {
-
-
-
-
-
-
-  /*  printf ("starting to parse command line\n");*/
-
-  /* Parse command line. */
-  /*  char *token, *save_ptr;
-  char *argv[128];
-  int i = 0;
-  for (token = strtok_r (cmdline, " ", &save_ptr); token != NULL;
-       token = strtok_r (NULL, " ", &save_ptr))
-    {
-      argv[i] = token;
-      i++;
-    }
-  int argc = i;
-
-  printf ("before putting raw stings on stack\n");
-
-  uint32_t *pd = pagedir_create ();
-  //handle error case
-  // Put args on stack
-  char *bottom_of_stack = PHYS_BASE;
-  int sum = 0;
-  // Read arguments from right to left.
-  for (i = argc - 1; i >= 0; i--)
-    {
-      int len = strlen (argv[i]) + 1;  // including null terminator
-      sum += len;
-      bottom_of_stack = PHYS_BASE - len;
-      strlcpy (bottom_of_stack, argv[i], len);
-      printf ("strlcpy\n");
-      argv[i] = bottom_of_stack;
-      printf ("done with raw strings\n");
-    }
-
-  printf ("before wordalign\n");
-
-  // Word-align
-  int pad = 4 - (sum % 4);
-  for (i = 0; i < pad; i++)
-    {
-      bottom_of_stack = PHYS_BASE - 1;
-      bottom_of_stack = (uint8_t)0;
-    }
-
-  printf ("before pushargs\n");
-
-  // Push args
-  bottom_of_stack = PHYS_BASE - 4;
-  bottom_of_stack = NULL;
-  for (i = argc - 1; i >= 0; i--)
-    {
-      bottom_of_stack = PHYS_BASE - 4;
-      bottom_of_stack = argv[i];
-    }
-
-  printf ("before argv and argc\n");
-
-  // argv and argc and return value
-  bottom_of_stack = PHYS_BASE - 4;
-  bottom_of_stack = bottom_of_stack + 4;
-  bottom_of_stack = PHYS_BASE - 4;
-  bottom_of_stack = argc;
-  bottom_of_stack = PHYS_BASE - 4;
-  bottom_of_stack = NULL;
-
-  */
-
-
-
-
-
   char *file_name = file_name_;
   struct intr_frame if_;
   bool success;
@@ -148,6 +83,7 @@ start_process (void *file_name_)
      arguments on the stack in the form of a `struct intr_frame',
      we just point the stack pointer (%esp) to our stack frame
      and jump to it. */
+  printf ("before asm volatile\n");
   asm volatile ("movl %0, %%esp; jmp intr_exit" : : "g" (&if_) : "memory");
   NOT_REACHED ();
 }
@@ -271,7 +207,7 @@ struct Elf32_Phdr
 #define PF_W 2          /* Writable. */
 #define PF_R 4          /* Readable. */
 
-static bool setup_stack (void **esp);
+static bool setup_stack (void **esp, struct arguments *args);
 static bool validate_segment (const struct Elf32_Phdr *, struct file *);
 static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
                           uint32_t read_bytes, uint32_t zero_bytes,
@@ -284,12 +220,26 @@ static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
 bool
 load (const char *file_name, void (**eip) (void), void **esp) 
 {
+  struct arguments args;
+
+  printf ("starting to parse command line\n");
+
+  /* Parse command line. */
+  char *token, *save_ptr;
+  int i = 0;
+  for (token = strtok_r (file_name, " ", &save_ptr); token != NULL;
+       token = strtok_r (NULL, " ", &save_ptr))
+    {
+      args.argv[i] = token;
+      i++;
+    }
+  args.argc = i;
+
   struct thread *t = thread_current ();
   struct Elf32_Ehdr ehdr;
   struct file *file = NULL;
   off_t file_ofs;
   bool success = false;
-  int i;
 
   /* Allocate and activate page directory. */
   t->pagedir = pagedir_create ();
@@ -298,10 +248,10 @@ load (const char *file_name, void (**eip) (void), void **esp)
   process_activate ();
 
   /* Open executable file. */
-  file = filesys_open (file_name);
+  file = filesys_open (args.argv[0]);
   if (file == NULL) 
     {
-      printf ("load: %s: open failed\n", file_name);
+      printf ("load: %s: open failed\n", args.argv[0]);
       goto done; 
     }
 
@@ -314,7 +264,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
       || ehdr.e_phentsize != sizeof (struct Elf32_Phdr)
       || ehdr.e_phnum > 1024) 
     {
-      printf ("load: %s: error loading executable\n", file_name);
+      printf ("load: %s: error loading executable\n", args.argv[0]);
       goto done; 
     }
 
@@ -378,7 +328,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
     }
 
   /* Set up stack. */
-  if (!setup_stack (esp))
+  if (!setup_stack (esp, &args))
     goto done;
 
   /* Start address. */
@@ -389,6 +339,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
  done:
   /* We arrive here whether the load is successful or not. */
   file_close (file);
+  printf ("before returning from load\n");
   return success;
 }
 
@@ -503,7 +454,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 /* Create a minimal stack by mapping a zeroed page at the top of
    user virtual memory. */
 static bool
-setup_stack (void **esp) 
+setup_stack (void **esp, struct arguments *args) 
 {
   uint8_t *kpage;
   bool success = false;
@@ -513,10 +464,69 @@ setup_stack (void **esp)
     {
       success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
       if (success)
-        *esp = PHYS_BASE - 12;    //TODO: fix this hack
+        {
+          *esp = PHYS_BASE;
+          printf ("before putting raw stings on stack\n");
+
+          int sum = 0;
+          int i;
+          // Read arguments from right to left.
+          for (i = args->argc - 1; i >= 0; i--)
+            {
+              int len = strlen (args->argv[i]) + 1; // include null terminator
+              sum += len;
+              *esp = (char *)*esp - len;
+              strlcpy (*esp, args->argv[i], len);
+              printf ("%s\n", *esp);
+              args->argv[i] = *esp;
+              printf ("done with raw strings\n");
+            }
+
+	  for (i = 0; i < args->argc; i++)
+	    printf ("%s\n", args->argv[i]);
+
+	  printf ("before wordalign\n");
+
+          // Word-align
+          int pad = 4 - (sum % 4);
+          if (pad == 4)
+            pad = 0;
+          char a = 0x0;
+          printf ("pad %d\n", pad);
+          for (i = 0; i < pad; i++)
+            {
+              *esp = (char *)*esp - 1;
+              memcpy (*esp, &a, sizeof(a));
+            }
+
+          printf ("before pushargs\n");
+
+          // Push args
+          *esp = (int *)*esp - 1;
+          int b = 0x0;
+          memcpy (*esp, &b, sizeof(b));
+          for (i = args->argc - 1; i >= 0; i--)
+            {
+              *esp = (int *)*esp - 1;
+              memcpy (*esp, &args->argv[i], sizeof (void *));
+            }
+
+          printf ("before argv and argc\n");
+
+          // argv and argc and return value
+          *esp = (int *)*esp - 1;
+          void *d = (int *)*esp + 1;
+          memcpy (*esp, &d, sizeof(d));
+	  *esp = (int *)*esp - 1;
+          int c = args->argc;
+          memcpy (*esp, &c, sizeof(c));
+          *esp = (int *)*esp - 1;
+          memcpy (*esp, &b, sizeof(b));
+        }
       else
         palloc_free_page (kpage);
     }
+  printf ("before returning from setup_stack\n");
   return success;
 }
 
