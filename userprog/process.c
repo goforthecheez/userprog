@@ -46,13 +46,11 @@ process_execute (const char *cmdline)
 
   /* Create a new thread to execute FILE_NAME. */
   tid = thread_create (cmdline, PRI_DEFAULT, start_process, fn_copy);
-  printf ("after thread_create\n");
   if (tid == TID_ERROR)
     {
       palloc_free_page (fn_copy);
-      printf ("inside");
     }
-  printf ("before returning from process_execute\n");
+
   return tid;
 }
 
@@ -83,7 +81,6 @@ start_process (void *file_name_)
      arguments on the stack in the form of a `struct intr_frame',
      we just point the stack pointer (%esp) to our stack frame
      and jump to it. */
-  printf ("before asm volatile\n");
   asm volatile ("movl %0, %%esp; jmp intr_exit" : : "g" (&if_) : "memory");
   NOT_REACHED ();
 }
@@ -222,8 +219,6 @@ load (const char *file_name, void (**eip) (void), void **esp)
 {
   struct arguments args;
 
-  printf ("starting to parse command line\n");
-
   /* Parse command line. */
   char *token, *save_ptr;
   int i = 0;
@@ -339,7 +334,6 @@ load (const char *file_name, void (**eip) (void), void **esp)
  done:
   /* We arrive here whether the load is successful or not. */
   file_close (file);
-  printf ("before returning from load\n");
   return success;
 }
 
@@ -466,7 +460,6 @@ setup_stack (void **esp, struct arguments *args)
       if (success)
         {
           *esp = PHYS_BASE;
-          printf ("before putting raw stings on stack\n");
 
           int sum = 0;
           int i;
@@ -477,29 +470,19 @@ setup_stack (void **esp, struct arguments *args)
               sum += len;
               *esp = (char *)*esp - len;
               strlcpy (*esp, args->argv[i], len);
-              printf ("%s\n", *esp);
               args->argv[i] = *esp;
-              printf ("done with raw strings\n");
             }
-
-	  for (i = 0; i < args->argc; i++)
-	    printf ("%s\n", args->argv[i]);
-
-	  printf ("before wordalign\n");
 
           // Word-align
           int pad = 4 - (sum % 4);
           if (pad == 4)
             pad = 0;
           char a = 0x0;
-          printf ("pad %d\n", pad);
           for (i = 0; i < pad; i++)
             {
               *esp = (char *)*esp - 1;
               memcpy (*esp, &a, sizeof(a));
             }
-
-          printf ("before pushargs\n");
 
           // Push args
           *esp = (int *)*esp - 1;
@@ -510,8 +493,6 @@ setup_stack (void **esp, struct arguments *args)
               *esp = (int *)*esp - 1;
               memcpy (*esp, &args->argv[i], sizeof (void *));
             }
-
-          printf ("before argv and argc\n");
 
           // argv and argc and return value
           *esp = (int *)*esp - 1;
@@ -526,7 +507,6 @@ setup_stack (void **esp, struct arguments *args)
       else
         palloc_free_page (kpage);
     }
-  printf ("before returning from setup_stack\n");
   return success;
 }
 
