@@ -26,7 +26,7 @@ static bool load (const char *cmdline, void (**eip) (void), void **esp);
    before process_execute() returns.  Returns the new process's
    thread id, or TID_ERROR if the thread cannot be created. */
 tid_t
-process_execute (const char *file_name) 
+process_execute (const char *cmdline) 
 {
   char *fn_copy;
   tid_t tid;
@@ -36,10 +36,10 @@ process_execute (const char *file_name)
   fn_copy = palloc_get_page (0);
   if (fn_copy == NULL)
     return TID_ERROR;
-  strlcpy (fn_copy, file_name, PGSIZE);
+  strlcpy (fn_copy, cmdline, PGSIZE);
 
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
+  tid = thread_create (cmdline, PRI_DEFAULT, start_process, fn_copy);
   if (tid == TID_ERROR)
     palloc_free_page (fn_copy); 
   return tid;
@@ -50,6 +50,82 @@ process_execute (const char *file_name)
 static void
 start_process (void *file_name_)
 {
+
+
+
+
+
+
+  /*  printf ("starting to parse command line\n");*/
+
+  /* Parse command line. */
+  /*  char *token, *save_ptr;
+  char *argv[128];
+  int i = 0;
+  for (token = strtok_r (cmdline, " ", &save_ptr); token != NULL;
+       token = strtok_r (NULL, " ", &save_ptr))
+    {
+      argv[i] = token;
+      i++;
+    }
+  int argc = i;
+
+  printf ("before putting raw stings on stack\n");
+
+  uint32_t *pd = pagedir_create ();
+  //handle error case
+  // Put args on stack
+  char *bottom_of_stack = PHYS_BASE;
+  int sum = 0;
+  // Read arguments from right to left.
+  for (i = argc - 1; i >= 0; i--)
+    {
+      int len = strlen (argv[i]) + 1;  // including null terminator
+      sum += len;
+      bottom_of_stack = PHYS_BASE - len;
+      strlcpy (bottom_of_stack, argv[i], len);
+      printf ("strlcpy\n");
+      argv[i] = bottom_of_stack;
+      printf ("done with raw strings\n");
+    }
+
+  printf ("before wordalign\n");
+
+  // Word-align
+  int pad = 4 - (sum % 4);
+  for (i = 0; i < pad; i++)
+    {
+      bottom_of_stack = PHYS_BASE - 1;
+      bottom_of_stack = (uint8_t)0;
+    }
+
+  printf ("before pushargs\n");
+
+  // Push args
+  bottom_of_stack = PHYS_BASE - 4;
+  bottom_of_stack = NULL;
+  for (i = argc - 1; i >= 0; i--)
+    {
+      bottom_of_stack = PHYS_BASE - 4;
+      bottom_of_stack = argv[i];
+    }
+
+  printf ("before argv and argc\n");
+
+  // argv and argc and return value
+  bottom_of_stack = PHYS_BASE - 4;
+  bottom_of_stack = bottom_of_stack + 4;
+  bottom_of_stack = PHYS_BASE - 4;
+  bottom_of_stack = argc;
+  bottom_of_stack = PHYS_BASE - 4;
+  bottom_of_stack = NULL;
+
+  */
+
+
+
+
+
   char *file_name = file_name_;
   struct intr_frame if_;
   bool success;
@@ -88,7 +164,7 @@ start_process (void *file_name_)
 int
 process_wait (tid_t child_tid UNUSED) 
 {
-  return -1;
+  while (true) {};
 }
 
 /* Free the current process's resources. */
@@ -437,7 +513,7 @@ setup_stack (void **esp)
     {
       success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
       if (success)
-        *esp = PHYS_BASE;
+        *esp = PHYS_BASE - 12;    //TODO: fix this hack
       else
         palloc_free_page (kpage);
     }

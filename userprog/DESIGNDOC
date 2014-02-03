@@ -38,9 +38,25 @@ Adeline Wong <adelinew@alumni.stanford.edu>
 
 >> A3: Why does Pintos implement strtok_r() but not strtok()?
 
+Because malloc() can't be implemented because none of the system calls
+allow for memory allocation?? I'm assuming that the _r refers to recursive.
+So strtok() would need enough memory to dump the string... And making a
+second copy could blow up the stack.
+
 >> A4: In Pintos, the kernel separates commands into a executable name
 >> and arguments.  In Unix-like systems, the shell does this
 >> separation.  Identify at least two advantages of the Unix approach.
+
+One advantage of the Unix approach is that since the argument-passing code
+lives in the shell (a user program), that code doesn't live in the kernel,
+which keeps the kernel small. This makes the kernel easier to understand.
+
+Second, moving the argument passing code may improve the modularity of the
+code. The kernel already performs a variety of functions, so it is useful
+to think of argument passing as associated with the shell.
+
+//TODO: Think this through, add more.
+
 
    			      SYSTEM CALLS
 			      ============
