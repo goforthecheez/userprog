@@ -75,6 +75,13 @@ start_process (void *file_name_)
   if_.eflags = FLAG_IF | FLAG_MBS;
   success = load (file_name, &if_.eip, &if_.esp);
 
+  struct thread *p = thread_current ()->parent;
+  lock_acquire (&p->wait_lock);
+  p->child_ready = true;
+  cond_signal (&p->wait_cond, &p->wait_lock);
+  lock_release (&p->wait_lock);
+    
+
   /* If load failed, quit. */
   palloc_free_page (file_name);
   if (!success) 

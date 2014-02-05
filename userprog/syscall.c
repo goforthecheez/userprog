@@ -1,12 +1,15 @@
 #include "userprog/syscall.h"
 #include <stdio.h>
 #include <syscall-nr.h>
+#include "devices/shutdown.h"
+#include "lib/user/syscall.h"
 #include "threads/interrupt.h"
 #include "threads/synch.h"
 #include "threads/thread.h"
 #include "userprog/process.h"
 
 void exit (int);
+pid_t exec (const char *);
 int write (int, const void*, unsigned);
 
 static void syscall_handler (struct intr_frame *);
@@ -22,20 +25,40 @@ syscall_handler (struct intr_frame *f UNUSED)
 {
   switch (*(int *)f->esp)
     {
+      case SYS_HALT:
+        shutdown_power_off ();
+        break;
       case SYS_EXIT:
         exit (*((int *)f->esp + 1));
+        break;
+      case SYS_EXEC:
+        exec (*(char **)((int *)f->esp + 1));
+        break;
+      case SYS_WAIT:
+        break;
+      case SYS_CREATE:
+        break;
+      case SYS_REMOVE:
+        break;
+      case SYS_OPEN:
+        break;
+      case SYS_FILESIZE:
+        break;
+      case SYS_READ:
         break;
       case SYS_WRITE:
 	write (*((int *)f->esp + 1), *(char **)((int *)f->esp + 2),
 	       *(unsigned *)((int *)f->esp + 3));
         break;
+      case SYS_TELL:
+        break;
+      case SYS_SEEK:
+        break;
+      case SYS_CLOSE:
+        break;
     }
 }
 
-/* Terminates the current user program, returning status to the kernel. If
-the process's parent waits for it (see below), this is the status that will
-be returned. Conventionally, a status of 0 indicates success and nonzero
-values indicate errors. */
 void exit (int status)
 {
   lock_acquire (&thread_current ()->parent->wait_lock);
@@ -53,20 +76,18 @@ void exit (int status)
   thread_exit ();
 }
 
-/* Writes size bytes from buffer to the open file fd. Returns the number of
-bytes actually written, which may be less than size if some bytes could not
-be written.
+pid_t exec (const char *cmd_line)
+{
+  struct thread *t = thread_current ();
 
-Writing past end-of-file would normally extend the file, but file growth is
-not implemented by the basic file system. The expected behavior is to write
-as many bytes as possible up to end-of-file and return the actual number
-written, or 0 if no bytes could be written at all.
+  lock_acquire (&t->wait_lock);
+  pid_t pid = process_execute (cmd_line);
+  cond_wait (&t->wait_cond, &t->wait_lock);
+  lock_release (&t->wait_lock);
 
-Fd 1 writes to the console. Your code to write to the console should write
-all of buffer in one call to putbuf(), at least as long as size is not bigger
-than a few hundred bytes. (It is reasonable to break up larger buffers.)
-Otherwise, lines of text output by different processes may end up interleaved
-on the console, confusing both human readers and our grading scripts.*/
+  return pid;
+}
+
 int write (int fd, const void *buffer, unsigned size)
 {
   if (fd == STDOUT_FILENO)

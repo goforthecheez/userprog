@@ -93,8 +93,9 @@ struct thread
     struct list_elem allelem;           /* List element for all threads list. */
     struct hash *children;              /* Child threads. */
     struct thread *parent;              /* Parent thread. */
-    struct lock wait_lock;
+    struct lock wait_lock;           //TODO: rename to process_lock
     struct condition wait_cond;
+    bool child_ready;
 
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
