@@ -2,7 +2,9 @@
 #include <stdio.h>
 #include <syscall-nr.h>
 #include "threads/interrupt.h"
+#include "threads/synch.h"
 #include "threads/thread.h"
+#include "userprog/process.h"
 
 void exit (int);
 int write (int, const void*, unsigned);
@@ -21,9 +23,8 @@ syscall_handler (struct intr_frame *f UNUSED)
   switch (*(int *)f->esp)
     {
       case SYS_EXIT:
-        printf ("exiting");
         exit (*((int *)f->esp + 1));
-	break;
+        break;
       case SYS_WRITE:
 	write (*((int *)f->esp + 1), *(char **)((int *)f->esp + 2),
 	       *(unsigned *)((int *)f->esp + 3));
@@ -37,8 +38,19 @@ be returned. Conventionally, a status of 0 indicates success and nonzero
 values indicate errors. */
 void exit (int status)
 {
-  thread_exit ();  //TODO: use process_exit()
-  // TODO: do something with status
+  lock_acquire (&thread_current ()->parent->wait_lock);
+  struct child c;
+  c.tid = thread_current ()->tid;
+
+  struct hash_elem *e = hash_find (thread_current ()->parent->children,
+                                   &c.elem);
+  struct child *found_child = hash_entry (e, struct child, elem);
+  found_child->done = true;
+  found_child->exit_status = status;
+  cond_signal (&thread_current ()->parent->wait_cond,
+               &thread_current ()->parent->wait_lock);
+  lock_release (&thread_current ()->parent->wait_lock);
+  thread_exit ();
 }
 
 /* Writes size bytes from buffer to the open file fd. Returns the number of

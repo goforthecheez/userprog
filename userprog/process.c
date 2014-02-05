@@ -14,8 +14,10 @@
 #include "threads/flags.h"
 #include "threads/init.h"
 #include "threads/interrupt.h"
+#include "threads/malloc.h"
 #include "threads/palloc.h"
 #include "threads/thread.h"
+#include "threads/synch.h"
 #include "threads/vaddr.h"
 
 struct arguments
@@ -44,8 +46,11 @@ process_execute (const char *cmdline)
     return TID_ERROR;
   strlcpy (fn_copy, cmdline, PGSIZE);
 
+  char *unused_saved_ptr;
+  char *file_name = strtok_r (cmdline, " ", &unused_saved_ptr);
+
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (cmdline, PRI_DEFAULT, start_process, fn_copy);
+  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
   if (tid == TID_ERROR)
     {
       palloc_free_page (fn_copy);
@@ -90,14 +95,30 @@ start_process (void *file_name_)
    exception), returns -1.  If TID is invalid or if it was not a
    child of the calling process, or if process_wait() has already
    been successfully called for the given TID, returns -1
-   immediately, without waiting.
-
-   This function will be implemented in problem 2-2.  For now, it
-   does nothing. */
+   immediately, without waiting. */
 int
 process_wait (tid_t child_tid UNUSED) 
 {
-  while (true) {};
+  lock_acquire (&thread_current ()->wait_lock);
+  // Look for the child sruct
+  struct child *c = (struct child *)malloc (sizeof (struct child));
+  c->tid = child_tid;
+  struct hash_elem *e = hash_find (thread_current ()->children, &c->elem);
+  if (e == NULL)
+    return -1;
+
+  struct child *found_child = hash_entry (e, struct child, elem);
+
+  // Wait on it
+  while (!found_child->done)
+    cond_wait (&thread_current ()->wait_cond, &thread_current ()->wait_lock);
+
+  // Remove e
+  int ret_val = found_child->exit_status;
+  hash_delete (thread_current ()->children, &found_child->elem);
+  lock_release (&thread_current ()->wait_lock);
+  return ret_val;
+  //while (true) {}
 }
 
 /* Free the current process's resources. */
@@ -106,6 +127,15 @@ process_exit (void)
 {
   struct thread *cur = thread_current ();
   uint32_t *pd;
+
+  /* Print exit status. */
+  struct child c;
+  c.tid = cur->tid;
+  struct child *found_child = hash_entry (hash_find (cur->parent->children,
+                                                     &c.elem),
+                                          struct child, elem);
+  int status = found_child->exit_status;
+  printf ("%s: exit(%d)\n", cur->name, status);
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */

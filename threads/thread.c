@@ -7,6 +7,7 @@
 #include "threads/flags.h"
 #include "threads/interrupt.h"
 #include "threads/intr-stubs.h"
+#include "threads/malloc.h"
 #include "threads/palloc.h"
 #include "threads/switch.h"
 #include "threads/synch.h"
@@ -66,6 +67,11 @@ static struct thread *running_thread (void);
 static struct thread *next_thread_to_run (void);
 static void init_thread (struct thread *, const char *name, int priority);
 static bool is_thread (struct thread *) UNUSED;
+static unsigned identity_hash_hash_func (const struct hash_elem *,
+                                         void *aux UNUSED);
+static bool identity_hash_less_func (const struct hash_elem *,
+                                     const struct hash_elem *,
+                                     void *aux UNUSED);
 static void *alloc_frame (struct thread *, size_t size);
 static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
@@ -112,6 +118,10 @@ thread_start (void)
 
   /* Start preemptive thread scheduling. */
   intr_enable ();
+
+  initial_thread->children = malloc (sizeof (struct child));
+  hash_init (initial_thread->children, identity_hash_hash_func,
+             identity_hash_less_func, NULL);
 
   /* Wait for the idle thread to initialize idle_thread. */
   sema_down (&idle_started);
@@ -201,6 +211,23 @@ thread_create (const char *name, int priority,
   /* Add to run queue. */
   thread_unblock (t);
 
+  // TODO: mutex?
+  if (strcmp (t->name, "idle") != 0)
+    {
+       t->children = malloc (sizeof (struct child));
+       hash_init (t->children, identity_hash_hash_func,
+                  identity_hash_less_func, NULL);
+
+       /* Register thread as a child. */
+       struct child *c = (struct child *)malloc (sizeof (struct child));
+       c->tid = tid;
+       c->done = false;
+
+       t->parent = thread_current ();
+
+       hash_insert (t->parent->children, &c->elem);  //TODO: throw error if result isn't NULL
+    }
+
   return tid;
 }
 
@@ -285,6 +312,14 @@ thread_exit (void)
 #ifdef USERPROG
   process_exit ();
 #endif
+
+  struct child c;
+  c.tid = thread_current ()->tid;
+  struct hash_elem *e = hash_find (thread_current ()->parent->children,
+                                   &c.elem);
+  struct child *found_child = hash_entry (e, struct child, elem);
+  found_child->done = true;
+  found_child->exit_status = -1;
 
   /* Remove thread from all threads list, set our status to dying,
      and schedule another process.  That process will destroy us
@@ -446,6 +481,22 @@ is_thread (struct thread *t)
   return t != NULL && t->magic == THREAD_MAGIC;
 }
 
+static unsigned
+identity_hash_hash_func (const struct hash_elem *e, void *aux UNUSED)
+{
+  struct child *c = hash_entry (e, struct child, elem);
+  return c->tid;   //TODO: are parens around c->tid needed?
+}
+
+static bool
+identity_hash_less_func (const struct hash_elem *a, const struct hash_elem *b,
+                         void * aux UNUSED)
+{
+  struct child *c = hash_entry (a, struct child, elem);
+  struct child *d = hash_entry (b, struct child, elem);
+  return c->tid < d->tid;
+}
+
 /* Does basic initialization of T as a blocked thread named
    NAME. */
 static void
@@ -463,6 +514,8 @@ init_thread (struct thread *t, const char *name, int priority)
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
   t->magic = THREAD_MAGIC;
+  lock_init (&t->wait_lock);
+  cond_init (&t->wait_cond);
 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);

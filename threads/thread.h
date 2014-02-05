@@ -4,6 +4,8 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
+#include <hash.h>
+#include "threads/synch.h"
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -89,6 +91,10 @@ struct thread
     uint8_t *stack;                     /* Saved stack pointer. */
     int priority;                       /* Priority. */
     struct list_elem allelem;           /* List element for all threads list. */
+    struct hash *children;              /* Child threads. */
+    struct thread *parent;              /* Parent thread. */
+    struct lock wait_lock;
+    struct condition wait_cond;
 
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
@@ -100,6 +106,14 @@ struct thread
 
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
+  };
+
+struct child
+  {
+    tid_t tid;
+    int exit_status;
+    bool done;
+    struct hash_elem elem;
   };
 
 /* If false (default), use round-robin scheduler.
