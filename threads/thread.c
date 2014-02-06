@@ -4,6 +4,7 @@
 #include <random.h>
 #include <stdio.h>
 #include <string.h>
+#include "filesys/file.h"
 #include "threads/flags.h"
 #include "threads/interrupt.h"
 #include "threads/intr-stubs.h"
@@ -72,6 +73,11 @@ static unsigned identity_hash_hash_func (const struct hash_elem *,
 static bool identity_hash_less_func (const struct hash_elem *,
                                      const struct hash_elem *,
                                      void *aux UNUSED);
+static unsigned fd_hash_hash_func (const struct hash_elem *,
+                                         void *aux UNUSED);
+static bool fd_hash_less_func (const struct hash_elem *,
+                                     const struct hash_elem *,
+                                     void *aux UNUSED);
 static void *alloc_frame (struct thread *, size_t size);
 static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
@@ -123,8 +129,8 @@ thread_start (void)
   hash_init (initial_thread->children, identity_hash_hash_func,
              identity_hash_less_func, NULL);
   initial_thread->open_files = palloc_get_page (0);
-  hash_init (initial_thread->open_files, identity_hash_hash_func,
-             identity_hash_less_func, NULL);
+  hash_init (initial_thread->open_files, fd_hash_hash_func,
+             fd_hash_less_func, NULL);
 
   /* Wait for the idle thread to initialize idle_thread. */
   sema_down (&idle_started);
@@ -231,8 +237,8 @@ thread_create (const char *name, int priority,
       hash_insert (t->parent->children, &c->elem);  //TODO: throw error if result isn't NULL
 
       t->open_files = palloc_get_page (0);
-      hash_init (t->open_files, identity_hash_hash_func,
-                 identity_hash_less_func, NULL);
+      hash_init (t->open_files, fd_hash_hash_func,
+                 fd_hash_less_func, NULL);
     }
 
   return tid;
@@ -503,6 +509,23 @@ identity_hash_less_func (const struct hash_elem *a, const struct hash_elem *b,
   struct child *d = hash_entry (b, struct child, elem);
   return c->tid < d->tid;
 }
+
+static unsigned
+fd_hash_hash_func (const struct hash_elem *e, void *aux UNUSED)
+{
+  struct file *f = hash_entry (e, struct file, elem);
+  return f->fd;
+}
+
+static bool
+fd_hash_less_func (const struct hash_elem *a, const struct hash_elem *b,
+                         void * aux UNUSED)
+{
+  struct file *c = hash_entry (a, struct file, elem);
+  struct file *d = hash_entry (b, struct file, elem);
+  return c->fd < d->fd;
+}
+
 
 /* Does basic initialization of T as a blocked thread named
    NAME. */

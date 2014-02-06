@@ -2,6 +2,8 @@
 #include <stdio.h>
 #include <syscall-nr.h>
 #include "devices/shutdown.h"
+#include "filesys/filesys.h"
+#include "filesys/file.h"
 #include "lib/user/syscall.h"
 #include "threads/interrupt.h"
 #include "threads/synch.h"
@@ -42,8 +44,10 @@ syscall_handler (struct intr_frame *f UNUSED)
       case SYS_REMOVE:
         break;
       case SYS_OPEN:
+	open (*(char **)((int *)f->esp + 1));
         break;
       case SYS_FILESIZE:
+        filesize (*((int *)f->esp + 1));
         break;
       case SYS_READ:
         break;
@@ -97,6 +101,31 @@ bool create (const char *file, unsigned initial_size)
     exit (-1);
 
   return success;
+}
+
+int open (const char *file)
+{
+  struct file *f = filesys_open (file);
+
+  if (f == NULL)
+    return -1;
+
+  struct thread *t = thread_current ();
+  lock_acquire (&t->filesys_lock);
+  hash_insert (t->open_files, &f->elem);
+  lock_release (&t->filesys_lock);
+  return f->fd;
+}
+
+int filesize (int fd)
+{
+  struct thread *t = thread_current ();
+  struct file lookup;
+  lookup.fd = fd;
+  struct file *f = hash_entry (hash_find (t->open_files, &lookup.elem),
+                               struct file, elem);
+
+  return file_length (f);
 }
 
 int write (int fd, const void *buffer, unsigned size)

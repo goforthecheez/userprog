@@ -120,12 +120,6 @@ struct child
     struct hash_elem elem;
   };
 
-struct open_file
-  {
-    int fd;
-    int offset;
-  };
-
 /* If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.
    Controlled by kernel command-line option "-o mlfqs". */

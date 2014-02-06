@@ -4,8 +4,9 @@
 #include <stdbool.h>
 #include "filesys/off_t.h"
 #include "devices/block.h"
+#include <bitmap.h>
 
-struct bitmap;
+//struct bitmap;
 
 void inode_init (void);
 bool inode_create (block_sector_t, off_t);
