@@ -119,8 +119,11 @@ thread_start (void)
   /* Start preemptive thread scheduling. */
   intr_enable ();
 
-  initial_thread->children = malloc (sizeof (struct child));
+  initial_thread->children = palloc_get_page (0);
   hash_init (initial_thread->children, identity_hash_hash_func,
+             identity_hash_less_func, NULL);
+  initial_thread->open_files = palloc_get_page (0);
+  hash_init (initial_thread->open_files, identity_hash_hash_func,
              identity_hash_less_func, NULL);
 
   /* Wait for the idle thread to initialize idle_thread. */
@@ -214,18 +217,22 @@ thread_create (const char *name, int priority,
   // TODO: mutex?
   if (strcmp (t->name, "idle") != 0)
     {
-       t->children = malloc (sizeof (struct child));
-       hash_init (t->children, identity_hash_hash_func,
-                  identity_hash_less_func, NULL);
+      t->children = palloc_get_page (0);
+      hash_init (t->children, identity_hash_hash_func,
+                 identity_hash_less_func, NULL);
 
-       /* Register thread as a child. */
-       struct child *c = (struct child *)malloc (sizeof (struct child));
-       c->tid = tid;
-       c->done = false;
+      /* Register thread as a child. */
+      struct child *c = (struct child *)malloc (sizeof (struct child));
+      c->tid = tid;
+      c->done = false;
 
-       t->parent = thread_current ();
+      t->parent = thread_current ();
 
-       hash_insert (t->parent->children, &c->elem);  //TODO: throw error if result isn't NULL
+      hash_insert (t->parent->children, &c->elem);  //TODO: throw error if result isn't NULL
+
+      t->open_files = palloc_get_page (0);
+      hash_init (t->open_files, identity_hash_hash_func,
+                 identity_hash_less_func, NULL);
     }
 
   return tid;
@@ -517,6 +524,8 @@ init_thread (struct thread *t, const char *name, int priority)
   lock_init (&t->wait_lock);
   cond_init (&t->wait_cond);
   t->child_ready = false;
+  lock_init (&t->filesys_lock);
+  cond_init (&t->filesys_cond);
 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);

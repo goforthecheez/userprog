@@ -96,6 +96,9 @@ struct thread
     struct lock wait_lock;           //TODO: rename to process_lock
     struct condition wait_cond;
     bool child_ready;
+    struct hash *open_files;
+    struct lock filesys_lock;
+    struct condition filesys_cond;
 
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
@@ -115,6 +118,12 @@ struct child
     int exit_status;
     bool done;
     struct hash_elem elem;
+  };
+
+struct open_file
+  {
+    int fd;
+    int offset;
   };
 
 /* If false (default), use round-robin scheduler.

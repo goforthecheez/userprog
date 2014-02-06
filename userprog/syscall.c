@@ -37,6 +37,7 @@ syscall_handler (struct intr_frame *f UNUSED)
       case SYS_WAIT:
         break;
       case SYS_CREATE:
+        create (*(char **)((int *)f->esp + 1), *(unsigned *)((int *)f->esp + 2));
         break;
       case SYS_REMOVE:
         break;
@@ -86,6 +87,16 @@ pid_t exec (const char *cmd_line)
   lock_release (&t->wait_lock);
 
   return pid;
+}
+
+bool create (const char *file, unsigned initial_size)
+{
+  bool success = filesys_create (file, initial_size);
+
+  if (!success)
+    exit (-1);
+
+  return success;
 }
 
 int write (int fd, const void *buffer, unsigned size)
