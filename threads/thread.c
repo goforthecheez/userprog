@@ -332,7 +332,6 @@ thread_exit (void)
                                    &c.elem);
   struct child *found_child = hash_entry (e, struct child, elem);
   found_child->done = true;
-  found_child->exit_status = -1;
 
   /* Remove thread from all threads list, set our status to dying,
      and schedule another process.  That process will destroy us

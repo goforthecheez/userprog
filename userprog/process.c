@@ -64,6 +64,9 @@ process_execute (const char *cmdline)
 static void
 start_process (void *file_name_)
 {
+  struct thread *p = thread_current ()->parent;
+  lock_acquire (&p->wait_lock);
+
   char *file_name = file_name_;
   struct intr_frame if_;
   bool success;
@@ -75,12 +78,11 @@ start_process (void *file_name_)
   if_.eflags = FLAG_IF | FLAG_MBS;
   success = load (file_name, &if_.eip, &if_.esp);
 
-  struct thread *p = thread_current ()->parent;
-  lock_acquire (&p->wait_lock);
+  //TODO FIX
   p->child_ready = true;
   cond_signal (&p->wait_cond, &p->wait_lock);
   lock_release (&p->wait_lock);
-    
+
 
   /* If load failed, quit. */
   palloc_free_page (file_name);
@@ -108,13 +110,21 @@ process_wait (tid_t child_tid UNUSED)
 {
   lock_acquire (&thread_current ()->wait_lock);
   // Look for the child sruct
-  struct child *c = (struct child *)malloc (sizeof (struct child));
-  c->tid = child_tid;
-  struct hash_elem *e = hash_find (thread_current ()->children, &c->elem);
-  if (e == NULL)
-    return -1;
+  struct child c;
+  c.tid = child_tid;
+  //  printf ("process_wait() is looking for thread %d", child_tid);
+  struct hash_elem *e = hash_find (thread_current ()->children, &c.elem);
 
+  if (e == NULL)
+    {
+      lock_release(&thread_current ()->wait_lock);
+      //      printf ("child is NULL!\n");
+      return -1;
+    }
+
+  //  printf ("child is not null!\n");
   struct child *found_child = hash_entry (e, struct child, elem);
+  //  printf ("process_wait(): child found: %d", found_child->tid);
 
   // Wait on it
   while (!found_child->done)
@@ -122,7 +132,8 @@ process_wait (tid_t child_tid UNUSED)
 
   // Remove e
   int ret_val = found_child->exit_status;
-  hash_delete (thread_current ()->children, &found_child->elem);
+  //  printf ("process_wait: return value is %d", ret_val);
+  //hash_delete (thread_current ()->children, &found_child->elem);
   lock_release (&thread_current ()->wait_lock);
   return ret_val;
   //while (true) {}
