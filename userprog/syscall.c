@@ -12,23 +12,26 @@
 #include "userprog/pagedir.h"
 #include "userprog/process.h"
 
-void halt (void);
-void exit (int status);
-pid_t exec (const char *cmd_line);
-int wait (pid_t pid);
-bool create (const char *file, unsigned initial_size);
-bool remove (const char *file);
-int open (const char *file);
-int filesize (int fd);
-int read (int fd, void *buffer, unsigned size);
-int write (int, const void*, unsigned);
-void seek (int fd, unsigned position);
-unsigned tell (int fd);
-void close (int fd);
-struct file *lookup_file (int fd);
-
+#define ARG_ONE ((int *)f->esp + 1)
+#define ARG_TWO ((int *)f->esp + 2)
+#define ARG_THREE ((int *)f->esp + 3)
 
 static void syscall_handler (struct intr_frame *);
+void halt (void);
+void exit (int);
+pid_t exec (const char *);
+int wait (pid_t);
+bool create (const char *, unsigned);
+bool remove (const char *);
+int open (const char *);
+int filesize (int );
+int read (int, void *, unsigned);
+int write (int, const void*, unsigned);
+void seek (int, unsigned);
+unsigned tell (int);
+void close (int);
+void check_args (void *, void *, void *);
+struct file *lookup_fd (int);
 
 void
 syscall_init (void) 
@@ -39,82 +42,96 @@ syscall_init (void)
 static void
 syscall_handler (struct intr_frame *f UNUSED) 
 {
+  /* Check that the stack pointer is valid. */
   if (pagedir_get_page (thread_current ()->pagedir, f->esp) == NULL)
     exit (-1);
 
   switch (*(int *)f->esp)
     {
+      /* For each syscall, check that its arguments are valid, then call
+         the appropriate handler, writing the return value to EAX. */
       case SYS_HALT:
         shutdown_power_off ();
         break;
       case SYS_EXIT:
-        if (pagedir_get_page (thread_current ()->pagedir, (int *)f->esp + 1) == NULL)
-          exit (-1);
-        exit (*((int *)f->esp + 1));
+        check_args (ARG_ONE, NULL, NULL);
+        exit (*ARG_ONE);
         break;
       case SYS_EXEC:
-        f->eax = exec (*(char **)((int *)f->esp + 1));
+        check_args (ARG_ONE, NULL, NULL);
+        f->eax = exec (*(char **)ARG_ONE);
         break;
       case SYS_WAIT:
-        f->eax = wait (*(unsigned *)((int *)f->esp + 1));
+        check_args (ARG_ONE, NULL, NULL);
+        f->eax = wait (*(unsigned *)ARG_ONE);
         break;
       case SYS_CREATE:
-        f->eax = create (*(char **)((int *)f->esp + 1), *(unsigned *)((int *)f->esp + 2));
+        check_args (ARG_ONE, ARG_TWO, NULL);
+        f->eax = create (*(char **)ARG_ONE, *(unsigned *)ARG_TWO);
         break;
     case SYS_REMOVE:
-        f->eax = remove (*(char **)((int *)f->esp + 1));
+        check_args (ARG_ONE, NULL, NULL);
+        f->eax = remove (*(char **)ARG_ONE);
         break;
       case SYS_OPEN:
-	f->eax = open (*(char **)((int *)f->esp + 1));
+        check_args (ARG_ONE, NULL, NULL);
+	f->eax = open (*(char **)ARG_ONE);
         break;
       case SYS_FILESIZE:
-        f->eax = filesize (*((int *)f->esp + 1));
+        check_args (ARG_ONE, NULL, NULL);
+        f->eax = filesize (*ARG_ONE);
         break;
       case SYS_READ:
-	f->eax = read (*((int *)f->esp + 1), *(char **)((int *)f->esp + 2),
-	       *(unsigned *)((int *)f->esp + 3));
+        check_args (ARG_ONE, ARG_TWO, ARG_THREE);
+	f->eax = read (*ARG_ONE, *(char **)ARG_TWO, *(unsigned *)ARG_THREE);
         break;
       case SYS_WRITE:
-	f->eax = write (*((int *)f->esp + 1), *(char **)((int *)f->esp + 2),
-	       *(unsigned *)((int *)f->esp + 3));
+        check_args (ARG_ONE, ARG_TWO, ARG_THREE);
+	f->eax = write (*ARG_ONE, *(char **)ARG_TWO, *(unsigned *)ARG_THREE);
         break;
       case SYS_TELL:
-        f->eax = tell (*((int *)f->esp + 1));
+        check_args (ARG_ONE, NULL, NULL);
+        f->eax = tell (*ARG_ONE);
         break;
       case SYS_SEEK:
-        seek (*((int *)f->esp + 1), *(unsigned *)((int *)f->esp + 2));
+        check_args (ARG_ONE, ARG_TWO, NULL);
+        seek (*ARG_ONE, *(unsigned *)ARG_TWO);
         break;
       case SYS_CLOSE:
-        close (*((int *)f->esp + 1));
+        check_args (ARG_ONE, NULL, NULL);
+        close (*ARG_ONE);
         break;
       default:
         exit (-1);
     }
 }
 
-void exit (int status)
+/* Terminates the current user program, returning STATUS to the kernel.
+   a status of 0 indicates success and nonzero values indicate errors. */
+void
+exit (int status)
 {
-  lock_acquire (&thread_current ()->parent->wait_lock);
-  struct child c;
-  c.tid = thread_current ()->tid;
-  //  printf ("exit() is looking for thread %d", c.tid);
+  struct thread *t = thread_current ();
 
-  struct hash_elem *e = hash_find (thread_current ()->parent->children,
-                                   &c.elem);
-  struct child *found_child = hash_entry (e, struct child, elem);
-  //  printf ("exit() found found_child %d", found_child->tid);
+  lock_acquire (&t->parent->wait_lock);
+  struct child c;
+  c.tid = t->tid;;
+  struct child *found_child = hash_entry (hash_find (t->parent->children, &c.elem),
+                                          struct child, elem);
   found_child->done = true;
   found_child->exit_status = status;
-  //  printf ("exit() return value is %d", found_child->exit_status);
-  cond_signal (&thread_current ()->parent->wait_cond,
-               &thread_current ()->parent->wait_lock);
-  lock_release (&thread_current ()->parent->wait_lock);
+  cond_signal (&t->parent->wait_cond, &t->parent->wait_lock);
+  lock_release (&t->parent->wait_lock);
+
   thread_exit ();
 }
 
-pid_t exec (const char *cmd_line)
+/* Runs the executable whose name is given in cmd_line, passing any given arguments,
+   and returns the new process's program id (pid). If the program cannot load or run
+   for any reason, returns -1. */
+pid_t
+exec (const char *cmd_line)
 {
-  // TODO: check that file is within userspace
   if (pagedir_get_page (thread_current ()->pagedir, cmd_line) == NULL)
     exit (-1);
 
@@ -123,102 +140,102 @@ pid_t exec (const char *cmd_line)
   lock_acquire (&t->wait_lock);
   pid_t pid = process_execute (cmd_line);
   cond_wait (&t->wait_cond, &t->wait_lock);
-  thread_current ()->child_ready = false;
+  t->child_ready = false;
   
   struct child c;
   c.tid = pid;
-  struct hash_elem *e = hash_find (thread_current ()->children, &c.elem);
-  struct child *found_child = hash_entry (e, struct child, elem);
+  struct child *found_child = hash_entry (hash_find (t->children, &c.elem),
+                                         struct child, elem);
   if (found_child->exit_status == -1)
-    {
-      lock_release (&t->wait_lock);
-      return -1;
-    }
-
+    pid = -1;
   lock_release (&t->wait_lock);
 
   return pid;
 }
 
-int wait (pid_t pid)
+/* Waits for a child process PID to die and returns its exit status.
+   If PID was terminated by the kernel, returns -1. Returns -1 immediately if
+   PID is invalid or if it was a child of the current process, or if wait() has
+   already been successfully called for the given PID. */
+int
+wait (pid_t pid)
 {
-  int ret_val = process_wait (pid);
+  int exit_status = process_wait (pid);
 
-  struct thread *t = thread_current ();
   struct child c;
   c.tid = pid;
-  hash_delete (t->children, &c.elem);
+  hash_delete (thread_current ()->children, &c.elem);
 
-  return ret_val;   //TODO WHAT IS THIS?
+  return exit_status;
 }
 
-bool create (const char *file, unsigned initial_size)
+/* Creates a new file initially initial_size bytes in size. Returns true
+   if successful, false otherwise. Note the creating a file does not open it. */
+bool
+create (const char *file, unsigned initial_size)
 {
-  // TODO: check that file is within usespace
   if (pagedir_get_page (thread_current ()->pagedir, file) == NULL)
     exit (-1);
 
-  bool success = filesys_create (file, initial_size);
-
-  if (!success)
-    return false;
-
-  return success;
+  return filesys_create (file, initial_size);
 }
 
-bool remove (const char *file)
+/* Deletes the file FILE. Returns true if successful, false otherwise.
+   Note that removing an open file does not close it. */
+bool
+remove (const char *file)
 {
-  // TODO: check that file is within userspace
   if (pagedir_get_page (thread_current ()->pagedir, file) == NULL)
     exit (-1);
-  
+
   return filesys_remove (file);
 }
 
-int open (const char *file)
+/* Opens the file FILE and returns its file descriptor, or -1 if the file could
+   not be opened. */
+int
+open (const char *file)
 {
-  // TODO: check that file is within userspace
   if (pagedir_get_page (thread_current ()->pagedir, file) == NULL)
     exit (-1);
 
   struct thread *t = thread_current ();
   lock_acquire (&t->filesys_lock);
   struct file *f = filesys_open (file);
-  lock_release (&t->filesys_lock);
-
   if (f == NULL)
     return -1;
-
-  lock_acquire (&t->filesys_lock);
   hash_insert (t->open_files, &f->elem);
   lock_release (&t->filesys_lock);
+
   return f->fd;
 }
 
-int filesize (int fd)
+/* Returns the size, in bytes, of the file open as FD. */
+int
+filesize (int fd)
 {
-  struct file *f = lookup_file (fd);
-  if (f == NULL)
-    {
-      exit (-1);
-    }
+  struct file *f = lookup_fd (fd);
   return file_length (f);
 }
 
-int read (int fd, void *buffer, unsigned size)
+/* Reads size bytes from the file open as FD into BUFFER. Returns the number
+   of bytes actually read, or -1 if the file could not be read. */
+int
+read (int fd, void *buffer, unsigned size)
 {
   if (pagedir_get_page (thread_current ()->pagedir, buffer) == NULL ||
       pagedir_get_page (thread_current ()->pagedir, (char *)buffer + size) == NULL)
     exit (-1);
 
-  struct file *f = lookup_file (fd);
+  if (fd == STDIN_FILENO)
+    {
+      int i;
+      for (i = 0; i < size; i++)
+        input_getc ();
+      return i;
+    }
 
-  // TODO: prototypical example
-  if (f == NULL)
-    exit (-1);
-
-
-  // TODO: handle reading from stdin
+  struct file *f = lookup_fd (fd);
 
   lock_acquire (&thread_current ()->filesys_lock);
   int bytes_read = file_read (f, buffer, size);
@@ -227,7 +244,11 @@ int read (int fd, void *buffer, unsigned size)
 
 }
 
-int write (int fd, const void *buffer, unsigned size)
+/* Writes SIZE bytes from BUFFER to the open file descriptor FD. Returns the
+   number of bytes actually written, which may be less than SIZE if some bytes
+   could not be written. */
+int
+write (int fd, const void *buffer, unsigned size)
 {
   if (pagedir_get_page (thread_current ()->pagedir, buffer) == NULL ||
       pagedir_get_page (thread_current ()->pagedir, (char *)buffer + size) == NULL)
@@ -239,9 +260,7 @@ int write (int fd, const void *buffer, unsigned size)
       return size;
     }
 
-  struct file *f = lookup_file (fd);
-  if (f == NULL)
-    exit (-1);
+  struct file *f = lookup_fd (fd);
 
   lock_acquire (&thread_current ()->filesys_lock);
   int bytes_written = file_write (f, buffer, size);
@@ -250,55 +269,82 @@ int write (int fd, const void *buffer, unsigned size)
   return bytes_written;
 }
 
-void seek (int fd, unsigned position)
+/* Changes the next byte to be read or written in open file FD to POSITION,
+   expressed in bytes from the beginning of the file. A seek past the current
+   end of a file is not an error. */
+void
+seek (int fd, unsigned position)
 {
-  struct file *f = lookup_file (fd);
-
-  if (f == NULL)
-    exit (-1);
-
+  struct file *f = lookup_fd (fd);
   return file_seek (f, position);
 }
 
-unsigned tell (int fd)
+/* Returns the position of the next byte to be read or written in open
+   file FD, expressed in bytes from the beginning of the file. */
+unsigned
+tell (int fd)
 {
-  struct file *f = lookup_file (fd);
-
-  if (f == NULL)
-    exit (-1);
-
+  struct file *f = lookup_fd (fd);
   return file_tell (f);
 }
 
+/* Closes file descriptor FD. Exiting or terminating a process implicitly
+   closes all its open file descriptors, as if by calling this function for
+   each one. */
 void close (int fd)
 {
-  struct file *f = lookup_file (fd);
+  struct thread *t = thread_current ();
 
-  if (f == NULL)
+  /* File descriptors 0, 1, and 2 are reserved and cannot be closed. */
+  if (fd == 0 || fd == 1 || fd == 2)
     exit (-1);
 
-  struct thread *t = thread_current ();
+  struct file *f = lookup_fd (fd);
+
+  /* If the lookup succeeded, delete the file from open_files. */
   lock_acquire (&t->filesys_lock);
   struct file lookup;
   lookup.fd = fd;
   hash_delete (t->open_files, &lookup.elem);  
   lock_release (&t->filesys_lock);
+
   file_close (f);
 }
 
+/* Verify that the passed syscall arguments are valid pointers.
+   If not, exit(-1) the user program with an kernel error. */
+void
+check_args (void *first, void *second, void *third)
+{
+  uint32_t *pd = thread_current ()->pagedir;
+
+  if (pagedir_get_page (pd, first) == NULL)
+    exit (-1);
+
+  if (second != NULL && pagedir_get_page (pd, second) == NULL)
+    exit (-1);
+
+  if (third != NULL && pagedir_get_page (pd, third) == NULL)
+    exit (-1);
+}
+
+/* Given a file descriptor FD, returns its corresponding file. If no file is
+   found, kernel error with exit(-1). */
 struct file *
-lookup_file (int fd)
+lookup_fd (int fd)
 {
   struct thread *t = thread_current ();
-  lock_acquire (&t->filesys_lock);
 
+  lock_acquire (&t->filesys_lock);
   struct file lookup;
   lookup.fd = fd;
-
   struct hash_elem *e = hash_find (t->open_files, &lookup.elem);
-  lock_release (&t->filesys_lock);
   if (e == NULL)
-    return NULL;
+    {
+      lock_release (&t->filesys_lock);
+      exit (-1);
+    }
+  lock_release (&t->filesys_lock);
 
   struct file *f = hash_entry (e, struct file, elem);
 

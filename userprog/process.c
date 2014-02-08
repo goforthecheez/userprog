@@ -27,29 +27,32 @@ static thread_func start_process NO_RETURN;
 static bool load (char *cmdline, void (**eip) (void), void **esp);
 
 /* Starts a new thread running a user program loaded from
-   FILENAME.  The new thread may be scheduled (and may even exit)
+   CMD_LINE.  The new thread may be scheduled (and may even exit)
    before process_execute() returns.  Returns the new process's
    thread id, or TID_ERROR if the thread cannot be created. */
 tid_t
 process_execute (const char *cmd_line) 
 {
+  /* If the command line length exceeds the maximum, politely warn the user. */
   if (strlen (cmd_line) > CMD_LINE_MAX_CHARS)
     {
-      printf ("Please limit command lines to %d  characters or fewer", CMD_LINE_MAX_CHARS);
+      printf ("Please limit command lines to %d  characters or fewer\n", CMD_LINE_MAX_CHARS);
       return TID_ERROR;
     }
 
-  char *cmd_line_copy;
+  char *load_copy;
   char *file_name_copy;
   tid_t tid;
 
-  /* Make a copy of FILE_NAME.
+  /* Make a copy of CMD_LINE.
      Otherwise there's a race between the caller and load(). */
-  cmd_line_copy = palloc_get_page (0);
-  if (cmd_line_copy == NULL)
+  load_copy = palloc_get_page (0);
+  if (load_copy == NULL)
     return TID_ERROR;
-  strlcpy (cmd_line_copy, cmd_line, PGSIZE);
+  strlcpy (load_copy, cmd_line, PGSIZE);
 
+  /* Make another copy of CMD_LINE.
+     This copy is only used to pull the file name. */
   file_name_copy = palloc_get_page (0);
   if (file_name_copy == NULL)
     return TID_ERROR;
@@ -58,16 +61,12 @@ process_execute (const char *cmd_line)
   char *unused_saved_ptr;
   char *file_name = strtok_r (file_name_copy, " ", &unused_saved_ptr);
 
-  /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, cmd_line_copy);
-
+  /* Create a new thread to execute CMD_LINE. */
+  tid = thread_create (file_name, PRI_DEFAULT, start_process, load_copy);
   palloc_free_page (file_name_copy);
 
   if (tid == TID_ERROR)
-    {
-      palloc_free_page (cmd_line_copy);
-      return tid;
-    }
+      palloc_free_page (load_copy);
 
   return tid;
 }
@@ -77,9 +76,6 @@ process_execute (const char *cmd_line)
 static void
 start_process (void *cmd_line_)
 {
-  struct thread *p = thread_current ()->parent;
-  lock_acquire (&p->wait_lock);
-
   char *cmd_line = cmd_line_;
   struct intr_frame if_;
   bool success;
@@ -91,11 +87,12 @@ start_process (void *cmd_line_)
   if_.eflags = FLAG_IF | FLAG_MBS;
   success = load (cmd_line, &if_.eip, &if_.esp);
 
-  //TODO FIX
+  /* Signal to exec that the child process has loaded. */
+  struct thread *p = thread_current ()->parent;
+  lock_acquire (&p->wait_lock);
   p->child_ready = true;
   cond_signal (&p->wait_cond, &p->wait_lock);
   lock_release (&p->wait_lock);
-
 
   /* If load failed, quit. */
   palloc_free_page (cmd_line);
@@ -121,55 +118,49 @@ start_process (void *cmd_line_)
 int
 process_wait (tid_t child_tid UNUSED) 
 {
-  lock_acquire (&thread_current ()->wait_lock);
-  // Look for the child sruct
+  struct thread *t = thread_current ();
+
+  /* Look for the child process. */
+  lock_acquire (&t->wait_lock);
   struct child c;
   c.tid = child_tid;
-  //  printf ("process_wait() is looking for thread %d", child_tid);
-  struct hash_elem *e = hash_find (thread_current ()->children, &c.elem);
-
+  struct hash_elem *e = hash_find (t->children, &c.elem);
   if (e == NULL)
     {
       lock_release(&thread_current ()->wait_lock);
-      //      printf ("child is NULL!\n");
       return -1;
     }
-
-  //  printf ("child is not null!\n");
   struct child *found_child = hash_entry (e, struct child, elem);
-  //  printf ("process_wait(): child found: %d", found_child->tid);
 
-  // Wait on it
+  /* Wait for the child process to finish executing. */
   while (!found_child->done)
-    cond_wait (&thread_current ()->wait_cond, &thread_current ()->wait_lock);
+    cond_wait (&t->wait_cond, &t->wait_lock);
 
-  // Remove e
-  int ret_val = found_child->exit_status;
-  //  printf ("process_wait: return value is %d", ret_val);
-  //hash_delete (thread_current ()->children, &found_child->elem);
-  lock_release (&thread_current ()->wait_lock);
-  return ret_val;
+  /* Return the exit status. */
+  int exit_status = found_child->exit_status;
+  lock_release (&t->wait_lock);
+
+  return exit_status;
 }
 
-/* Free the current process's resources. */
+/* Print the process termination message and free the current process's resources. */
 void
 process_exit (void)
 {
-  struct thread *cur = thread_current ();
   uint32_t *pd;
 
-  /* Print exit status. */
+  /* Print process termination message. */
+  struct thread *t = thread_current ();
   struct child c;
-  c.tid = cur->tid;
-  struct child *found_child = hash_entry (hash_find (cur->parent->children,
-                                                     &c.elem),
+  c.tid = t->tid;
+  struct child *found_child = hash_entry (hash_find (t->parent->children, &c.elem),
                                           struct child, elem);
   int status = found_child->exit_status;
-  printf ("%s: exit(%d)\n", cur->name, status);
+  printf ("%s: exit(%d)\n", t->name, status);
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
-  pd = cur->pagedir;
+  pd = t->pagedir;
   if (pd != NULL) 
     {
       /* Correct ordering here is crucial.  We must set
@@ -179,7 +170,7 @@ process_exit (void)
          directory before destroying the process's page
          directory, or our active page directory will be one
          that's been freed (and cleared). */
-      cur->pagedir = NULL;
+      t->pagedir = NULL;
       pagedir_activate (NULL);
       pagedir_destroy (pd);
     }
@@ -270,21 +261,21 @@ static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
                           uint32_t read_bytes, uint32_t zero_bytes,
                           bool writable);
 
-/* Loads an ELF executable from FILE_NAME into the current thread.
-   Stores the executable's entry point into *EIP
-   and its initial stack pointer into *ESP.
+/* Loads an ELF executable from the first token of CMD_LINE into the
+   current thread. Stores the executable's entry point into *EIP and
+   its initial stack pointer into *ESP.
    Returns true if successful, false otherwise. */
 bool
-load (char *file_name, void (**eip) (void), void **esp) 
+load (char *cmd_line, void (**eip) (void), void **esp) 
 {
-  /* Parse command line. */
   char **argv = (char **)malloc (CMD_LINE_MAX_CHARS * sizeof (char *));
   if (argv == NULL)
     return false;
 
+  /* Parse the command line. */
   char *token, *save_ptr;
   int i = 0;
-  for (token = strtok_r (file_name, " ", &save_ptr); token != NULL;
+  for (token = strtok_r (cmd_line, " ", &save_ptr); token != NULL;
        token = strtok_r (NULL, " ", &save_ptr))
     {
       argv[i] = token;
@@ -312,6 +303,8 @@ load (char *file_name, void (**eip) (void), void **esp)
       success = false;
       goto done; 
     }
+
+  /* Deny writes to executables. */
   file_deny_write (file);
   t->my_executable = file;
 
@@ -510,8 +503,8 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
   return true;
 }
 
-/* Create a minimal stack by mapping a zeroed page at the top of
-   user virtual memory. */
+/* Creates a user stack, according to the convention described in "3.5.1 Program
+   Startup Details." */
 static bool
 setup_stack (void **esp, char **argv, int argc) 
 {
@@ -526,48 +519,44 @@ setup_stack (void **esp, char **argv, int argc)
         {
           *esp = PHYS_BASE;
 
-          int sum = 0;
-          int i;
-          // Read arguments from right to left.
+          int total_len = 0;
+          int i, len;
+          /* Read arguments from right to left. */
           for (i = argc - 1; i >= 0; i--)
             {
-              int len = strlen (argv[i]) + 1; // include null terminator
-              sum += len;
+              len = strlen (argv[i]) + 1;      // Include null terminator
+              total_len += len;
               *esp = (char *)*esp - len;
               strlcpy (*esp, argv[i], len);
-              argv[i] = *esp;
+              argv[i] = *esp;                  // Save address of first char of argv[i]
             }
 
-          // Word-align
-          int pad = 4 - (sum % 4);
+          /* Correct word-alignment */
+          int pad = 4 - (total_len % 4);
           if (pad == 4)
             pad = 0;
-          char a = 0x0;
           for (i = 0; i < pad; i++)
-            {
-              *esp = (char *)*esp - 1;
-              memcpy (*esp, &a, sizeof(a));
-            }
+            *esp = (char *)*esp - 1;
 
-          // Push args
-          *esp = (int *)*esp - 1;
-          int b = 0x0;
-          memcpy (*esp, &b, sizeof(b));
+          /* Push pointers to args onto the stack. */
+          *esp = (int *)*esp - 1;              // NULL pointer for argc'th index
           for (i = argc - 1; i >= 0; i--)
             {
               *esp = (int *)*esp - 1;
               memcpy (*esp, &argv[i], sizeof (void *));
             }
 
-          // argv and argc and return value
+          /* Push pointer to beginning of argv[] onto stack. */
           *esp = (int *)*esp - 1;
-          void *d = (int *)*esp + 1;
-          memcpy (*esp, &d, sizeof(d));
+          void *argv_front = (int *)*esp + 1;
+          memcpy (*esp, &argv_front, sizeof (void *));
+
+          /* Push argc onto stack. */
 	  *esp = (int *)*esp - 1;
-          int c = argc;
-          memcpy (*esp, &c, sizeof(c));
+          memcpy (*esp, &argc, sizeof (int));
+
+          /* Push dummy return address onto stack. */
           *esp = (int *)*esp - 1;
-          memcpy (*esp, &b, sizeof(b));
         }
       else
         palloc_free_page (kpage);
