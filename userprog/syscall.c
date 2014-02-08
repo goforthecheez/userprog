@@ -81,6 +81,8 @@ syscall_handler (struct intr_frame *f UNUSED)
       case SYS_CLOSE:
         close (*((int *)f->esp + 1));
         break;
+      default:
+        exit (-1);
     }
 }
 
@@ -115,6 +117,7 @@ pid_t exec (const char *cmd_line)
   lock_acquire (&t->wait_lock);
   pid_t pid = process_execute (cmd_line);
   cond_wait (&t->wait_cond, &t->wait_lock);
+  thread_current ()->child_ready = false;
   lock_release (&t->wait_lock);
 
   return pid;
