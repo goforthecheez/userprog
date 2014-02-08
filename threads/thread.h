@@ -112,12 +112,13 @@ struct thread
     unsigned magic;                     /* Detects stack overflow. */
   };
 
+/* Representation of thread's spawned child process. */
 struct child
   {
-    tid_t tid;
-    int exit_status;
-    bool done;
-    struct hash_elem elem;
+    tid_t pid;                  /* The process ID. */
+    bool done;                  /* Whether process execution is complete. */
+    int exit_status;            /* If process is done, its exit status. */
+    struct hash_elem elem;      /* Hashtable element. */
   };
 
 /* If false (default), use round-robin scheduler.

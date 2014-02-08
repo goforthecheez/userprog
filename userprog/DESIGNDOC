@@ -38,18 +38,13 @@ Unchanged.
 >> you arrange for the elements of argv[] to be in the right order?
 >> How do you avoid overflowing the stack page?
 
-Argument parsing is implemented by making a copy of the command line (to
-avoid race conditions with the calling function), plumbing the copy through
-process_execute() and start_process(), and finally splitting most of the
-actual work between load() and setup_stack().
-
 strtok_r() is convenient for tokenizing the command line. Unfortunately,
 the stack needs to be set up with the last argument first, which means that
 if we want to utilize strtok_r(), we need to tokenize the arguments until
 we get to the end, then remember everything that came before. This chunk
 of the work lives in load(), which parses the command line using strtok_r()
 and stores the arguments in a malloc'ed block of memory (which I named
-arv), as well as its length (which I named argc). I use malloc in order not
+argv), as well as its length (which I named argc). I use malloc in order not
 to waste a huge amount of space on the stack storing arguments as local
 variables.
 
@@ -60,10 +55,10 @@ argument strlcpy() the argument into a space vacated by the stack pointer,
 then copy the address the stack pointer is pointing to back into argv.
 At the same time, we keep a running total of the length of the copied arguments,
 including the null terminator. If the running total is not a multiple of 4,
-we pad with the appropriate number of null characters. Then we copy a null
+we pad with the appropriate number of null characters. Then we vacate 1
 address and then iterate again through argv in reverse order and memcpy()
 the addresses into 4-byte spaces vacated by the stack pointer. Finally, we
-copy in argc and a null address for the return address. 
+copy in argc and leave one address of space for the fake return address.
 
 I avoid overflowing the stack page by limiting the number of characters in
 the command line to 700 characters. The stack page is 4096 bytes long. The
@@ -119,30 +114,44 @@ to create multipel stacks in one shot, which is unnecessarily painful.
 
 Added to struct thread:
 
-    struct hash *children;
-    struct thread *parent;
-    struct condition wait_cond;
-    bool child_ready;
-    struct hash *open_files;
-    struct lock filesys_lock;
-    struct condition filesys_cond;
+    struct thread *parent;              /* Parent process. */
+    struct hash *children;              /* Spawned child processes. */
+    struct lock child_lock;             /* Lock protecting children hashtable. */
+    bool child_ready;                   /* True if a child process has started.
+                                           Used to synchronize between exec() and load(). */
+    struct condition child_cond;        /* Conditional variable for child_ready. */ 
+    struct hash *open_files;            /* Files opened by this process. */ 
+    struct lock open_files_lock;        /* Lock protecting open_files hashtable. */
+    struct file *my_executable;         /* Executable file this process is running. */   
 
 Added struct child to thread.h:
 
-struct child
-  {
-    tid_t tid;
-    int exit_status;
-    bool done;
-    struct hash_elem elem;
-  }
+    /* Representation of thread's spawned child process. */
+    struct child
+      {
+        tid_t pid;                  /* The process ID. */
+        bool done;                  /* Whether process execution is complete. */
+        int exit_status;            /* If process is done, its exit status. */
+        struct hash_elem elem;      /* Hashtable element. */
+      };
+
+Added global variable to syscall.c:
+
+    /* File system lock. Currently, the file system does not provide internal
+    synchronization, so this will have to suffice. */
+    struct lock filesys_lock;
 
 Added to struct file:
 
-    int fd;
-    struct hash_elem elem;
+    int fd;                         /* File descriptor. */
+    struct hash_elem elem;          /* Hashtable element. */
 
 In addition, struct file was moved form file.c to file.h.
+
+Added global variable to file.c:
+
+    /* Global file descriptor counter. */
+    int fd_counter = 3;
 
 >> B2: Describe how file descriptors are associated with open files.
 >> Are file descriptors unique within the entire OS or just within a
@@ -166,16 +175,15 @@ pointer arithmetic!) of arguments into the argument list for the syscall
 implementation.
 
 The filesys file system code already contains file_read() and file_write()
-functions, but these do not check their arguments. The read() and write()
-implementations take in a file descriptor int, a buffer void *, and an
-initial_size unsigned integer. So the first thing read() and write() do
+functions, but these do not check their arguments for validity. The read()
+and write() implementations take in a file descriptor int, a buffer void *,
+and an initial_size unsigned integer. So the first thing read() and write() do
 are check that the buffer is valid by crawling through the length of buffer,
-byte-by-byte, and checking that they map to user memory.
+byte-by-byte, and checking that they map to mapped user memory.
 
 After this, if write() sees that its file descriptor is 1, then it prints
 to stdout using putbuf(). In the case of read(), if its file descriptor is 0,
-it should read from stdin, but I can't the function analogous to putbuf() in
-the lib directory anywhere, so I fail in this case.
+it reads from stdin using intput_getc().
 
 After that, read() and write() call the lookup_file() helper function, passing
 in the file descriptor. Either lookup_file() returns a file struct, or it
@@ -187,7 +195,7 @@ error appropriately.
 Finally, if a matching file is found, file_write() or file_read() will
 be called, as appropriate.
 
-The number of bytes read or written will be returned to the caller in the eax
+The number of bytes read or written is returned to the caller in the EAX
 register.
 
 >> B4: Suppose a system call causes a full page (4,096 bytes) of data
@@ -213,10 +221,7 @@ case, both the first and last byte are checked.
 >> B5: Briefly describe your implementation of the "wait" system call
 >> and how it interacts with process termination.
 
-The basic strategy is similar to exec() explained in B7.
-
-To avoid duplication, please see B8 for a detailed explanation of how
-wait() works.
+Please see B8. I think the explanation there covers this question, too.
 
 >> B6: Any access to user program memory at a user-specified address
 >> can fail due to a bad pointer value.  Such accesses must cause the
@@ -238,14 +243,10 @@ so I do not perform any checks and delegate that responsibility to the
 individual syscall handlers. However, if the syscall number is invalid,
 I fall through to the default case and kill the user process with exit (-1).
 
-In the syscall handlers, I use the convention that all checks are performed
-before reaching the main computational step of that syscall. This makes
-it easy to look up where the checks are wrong, and also what a given
-syscall handler does.
-
-//TODO: How do I make sure that things are freed?
-
-//TODO: Example
+In the syscall handlers, in order not to obscure the primary function
+of the code, I use the convention that checks are performed
+before reaching the main computational step of that syscall, and special
+cases are handled before the general case.
 
 ---- SYNCHRONIZATION ----
 
@@ -254,8 +255,8 @@ syscall handler does.
 >> loading.  How does your code ensure this?  How is the load
 >> success/failure status passed back to the thread that calls "exec"?
 
-I created a child_ready bool, which is initialized to false, in the parent
-thread and also created a lock and condition variable to protect it.
+The parent thread contains a child_ready bool, which is initialized to
+false, as well as a lock and condition variable to protect the bool.
 exec() acquires the lock before calling process_execute() on a file,
 which then spawns a child process. Then the parent calls cond_wait(),
 waiting for child_ready to be set to true.
@@ -279,24 +280,35 @@ a pid could be returned by process_execute().
 >> terminates without waiting, before C exits?  After C exits?  Are
 >> there any special cases?
 
-P keeps track of its children, and each child struct contains a done
-boolean to register that a child has completed running, which is initialized to false. There are also
-a lock and a condition variable. Before P calls process_wait(), it
-acquires a lock, and if the child is not done, then it calls process_wait(), then it calls cond_wait() and blocks waiting for the child to complete. If the child is done, then P immediately gets the exit_status from the child struct and deletes the child struct.
+I use a lock and condition variable to prevent race conditions and
+ensure proper synchronization.
 
-When the child is complete, it sets done to true and puts its exit status in the exit_status int field in the child struct. Since the child will die, the return value is lost unless it is stored in memory. Then the child calls cond_signal().
+P keeps track of its children as child structs in its children
+hashtable, and each child struct contains a done boolean to register
+that a child has completed running. This boolean is initialized to false.
+There are also a lock and a condition variable. When P calls wait(C) after
+C exits, then done will be true in the child struct, so P can immediately
+grabs the exit_status from the child struct and deletes the child struct
+from children.
 
-Finally, P wakes up, gets the exit_status from the child struct and deletes the child struct.
+When P calls wait(C) after C exts, then the done boolean will be
+false. In this case, P calls process_wait() and then calls cond_wait()
+to wait for the child to complete execution. When the child is complete,
+it sets done to true and puts its exit status in the exit_status field.
+Setting this field is necessary because the child process will die, so
+its exit status is lost unless it is stored somewhere in memory. Then the child
+calls cond_signal() to wake up its parent. Finally, P wakes up, gets
+the exit_status from the child struct and deletes the child struct.
 
-//TODO: How are resources freed?
+My implementation doesn't work when P terminates before C. The fix is
+to set the parent field to NULL in all of P's children, when P dies.
+Also, one needs to add a check to C to check that its parent field is
+not NULL and only set done and exit_status in this case. Since there is
+no P, the children hashtable no longer exists, so child structs do
+not have to be deleted in this case.
 
-In the case that the parent dies first, since I've asked each parent
-thread to keep track of its children, C will have nowhere to register
-its status and the OS will kernel panic.
-
-//TODO: parent dies first
-
-There are no special cases because locks prevent inconsistent states.
+There are no special cases because I use locks to prevent inconsistent
+states.
 
 ---- RATIONALE ----
 

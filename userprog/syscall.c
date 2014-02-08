@@ -120,7 +120,7 @@ exit (int status)
 
   lock_acquire (&t->parent->child_lock);
   struct child c;
-  c.tid = t->tid;;
+  c.pid = t->tid;;
   struct child *found_child = hash_entry (hash_find (t->parent->children, &c.elem),
                                           struct child, elem);
   found_child->done = true;
@@ -148,7 +148,7 @@ exec (const char *cmd_line)
   t->child_ready = false;
   
   struct child c;
-  c.tid = pid;
+  c.pid = pid;
   struct child *found_child = hash_entry (hash_find (t->children, &c.elem),
                                          struct child, elem);
   if (found_child->exit_status == -1)
@@ -169,7 +169,7 @@ wait (pid_t pid)
 
   lock_acquire (&thread_current ()->child_lock);
   struct child c;
-  c.tid = pid;
+  c.pid = pid;
   hash_delete (thread_current ()->children, &c.elem);
   lock_release (&thread_current ()->child_lock);
 

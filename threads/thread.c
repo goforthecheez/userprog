@@ -227,7 +227,7 @@ thread_create (const char *name, int priority,
 
       /* Register thread as its parent's child. */
       struct child *c = (struct child *)malloc (sizeof (struct child));
-      c->tid = tid;
+      c->pid = tid;
       c->done = false;
       hash_insert (t->parent->children, &c->elem);
     }
@@ -325,7 +325,7 @@ thread_exit (void)
 
 
   struct child c;
-  c.tid = thread_current ()->tid;
+  c.pid = thread_current ()->tid;
   struct hash_elem *e = hash_find (thread_current ()->parent->children,
                                    &c.elem);
   struct child *found_child = hash_entry (e, struct child, elem);
@@ -497,7 +497,7 @@ static unsigned
 child_hash_hash_func (const struct hash_elem *e, void *aux UNUSED)
 {
   struct child *c = hash_entry (e, struct child, elem);
-  return c->tid;   //TODO: are parens around c->tid needed?
+  return c->pid;
 }
 
 static bool
@@ -506,7 +506,7 @@ child_hash_less_func (const struct hash_elem *a, const struct hash_elem *b,
 {
   struct child *c = hash_entry (a, struct child, elem);
   struct child *d = hash_entry (b, struct child, elem);
-  return c->tid < d->tid;
+  return c->pid < d->pid;
 }
 
 static unsigned

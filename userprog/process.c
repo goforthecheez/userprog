@@ -123,7 +123,7 @@ process_wait (tid_t child_tid UNUSED)
   /* Look for the child process. */
   lock_acquire (&t->child_lock);
   struct child c;
-  c.tid = child_tid;
+  c.pid = child_tid;
   struct hash_elem *e = hash_find (t->children, &c.elem);
   if (e == NULL)
     {
@@ -152,7 +152,7 @@ process_exit (void)
   /* Print process termination message. */
   struct thread *t = thread_current ();
   struct child c;
-  c.tid = t->tid;
+  c.pid = t->tid;
   struct child *found_child = hash_entry (hash_find (t->parent->children, &c.elem),
                                           struct child, elem);
   int status = found_child->exit_status;
