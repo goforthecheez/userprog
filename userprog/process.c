@@ -89,10 +89,10 @@ start_process (void *cmd_line_)
 
   /* Signal to exec that the child process has loaded. */
   struct thread *p = thread_current ()->parent;
-  lock_acquire (&p->wait_lock);
+  lock_acquire (&p->child_lock);
   p->child_ready = true;
-  cond_signal (&p->wait_cond, &p->wait_lock);
-  lock_release (&p->wait_lock);
+  cond_signal (&p->child_cond, &p->child_lock);
+  lock_release (&p->child_lock);
 
   /* If load failed, quit. */
   palloc_free_page (cmd_line);
@@ -121,24 +121,24 @@ process_wait (tid_t child_tid UNUSED)
   struct thread *t = thread_current ();
 
   /* Look for the child process. */
-  lock_acquire (&t->wait_lock);
+  lock_acquire (&t->child_lock);
   struct child c;
   c.tid = child_tid;
   struct hash_elem *e = hash_find (t->children, &c.elem);
   if (e == NULL)
     {
-      lock_release(&thread_current ()->wait_lock);
+      lock_release(&thread_current ()->child_lock);
       return -1;
     }
   struct child *found_child = hash_entry (e, struct child, elem);
 
   /* Wait for the child process to finish executing. */
   while (!found_child->done)
-    cond_wait (&t->wait_cond, &t->wait_lock);
+    cond_wait (&t->child_cond, &t->child_lock);
 
   /* Return the exit status. */
   int exit_status = found_child->exit_status;
-  lock_release (&t->wait_lock);
+  lock_release (&t->child_lock);
 
   return exit_status;
 }

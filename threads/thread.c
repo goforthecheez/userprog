@@ -543,11 +543,10 @@ init_thread (struct thread *t, const char *name, int priority)
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
   t->magic = THREAD_MAGIC;
-  lock_init (&t->wait_lock);
-  cond_init (&t->wait_cond);
+  lock_init (&t->child_lock);
   t->child_ready = false;
-  lock_init (&t->filesys_lock);
-  cond_init (&t->filesys_cond);
+  cond_init (&t->child_cond);
+  lock_init (&t->open_files_lock);
 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);

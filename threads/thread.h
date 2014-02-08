@@ -91,15 +91,6 @@ struct thread
     uint8_t *stack;                     /* Saved stack pointer. */
     int priority;                       /* Priority. */
     struct list_elem allelem;           /* List element for all threads list. */
-    struct hash *children;              /* Child threads. */
-    struct thread *parent;              /* Parent thread. */
-    struct lock wait_lock;           //TODO: rename to process_lock
-    struct condition wait_cond;
-    bool child_ready;
-    struct hash *open_files;
-    struct lock filesys_lock;
-    struct condition filesys_cond;
-    struct file *my_executable;
 
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
@@ -107,6 +98,14 @@ struct thread
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
+    struct thread *parent;              /* Parent process. */ 
+    struct hash *children;              /* Spawned child processes. */
+    struct lock child_lock;             /* Lock protecting children hashtable. */
+    bool child_ready;                   /* True if a child process has started. */
+    struct condition child_cond;        /* Conditional variable for child_ready. */
+    struct hash *open_files;            /* Files opened by this process. */
+    struct lock open_files_lock;        /* Lock protecting open_files hashtable. */
+    struct file *my_executable;         /* Executable file this process is running. */
 #endif
 
     /* Owned by thread.c. */

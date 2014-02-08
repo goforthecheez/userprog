@@ -1,6 +1,7 @@
 #include "userprog/syscall.h"
 #include <stdio.h>
 #include <syscall-nr.h>
+#include "devices/input.h"
 #include "devices/shutdown.h"
 #include "filesys/filesys.h"
 #include "filesys/file.h"
@@ -16,9 +17,12 @@
 #define ARG_TWO ((int *)f->esp + 2)
 #define ARG_THREE ((int *)f->esp + 3)
 
+/* File system lock. Currently, the file system does not provide internal
+   synchronization, so this will have to suffice. */
+struct lock filesys_lock;
+
 static void syscall_handler (struct intr_frame *);
 void halt (void);
-void exit (int);
 pid_t exec (const char *);
 int wait (pid_t);
 bool create (const char *, unsigned);
@@ -37,6 +41,7 @@ void
 syscall_init (void) 
 {
   intr_register_int (0x30, 3, INTR_ON, syscall_handler, "syscall");
+  lock_init (&filesys_lock);
 }
 
 static void
@@ -113,15 +118,15 @@ exit (int status)
 {
   struct thread *t = thread_current ();
 
-  lock_acquire (&t->parent->wait_lock);
+  lock_acquire (&t->parent->child_lock);
   struct child c;
   c.tid = t->tid;;
   struct child *found_child = hash_entry (hash_find (t->parent->children, &c.elem),
                                           struct child, elem);
   found_child->done = true;
   found_child->exit_status = status;
-  cond_signal (&t->parent->wait_cond, &t->parent->wait_lock);
-  lock_release (&t->parent->wait_lock);
+  cond_signal (&t->parent->child_cond, &t->parent->child_lock);
+  lock_release (&t->parent->child_lock);
 
   thread_exit ();
 }
@@ -132,14 +137,14 @@ exit (int status)
 pid_t
 exec (const char *cmd_line)
 {
-  if (pagedir_get_page (thread_current ()->pagedir, cmd_line) == NULL)
-    exit (-1);
-
   struct thread *t = thread_current ();
 
-  lock_acquire (&t->wait_lock);
+  if (pagedir_get_page (t->pagedir, cmd_line) == NULL)
+    exit (-1);
+
+  lock_acquire (&t->child_lock);
   pid_t pid = process_execute (cmd_line);
-  cond_wait (&t->wait_cond, &t->wait_lock);
+  cond_wait (&t->child_cond, &t->child_lock);
   t->child_ready = false;
   
   struct child c;
@@ -148,7 +153,7 @@ exec (const char *cmd_line)
                                          struct child, elem);
   if (found_child->exit_status == -1)
     pid = -1;
-  lock_release (&t->wait_lock);
+  lock_release (&t->child_lock);
 
   return pid;
 }
@@ -162,9 +167,11 @@ wait (pid_t pid)
 {
   int exit_status = process_wait (pid);
 
+  lock_acquire (&thread_current ()->child_lock);
   struct child c;
   c.tid = pid;
   hash_delete (thread_current ()->children, &c.elem);
+  lock_release (&thread_current ()->child_lock);
 
   return exit_status;
 }
@@ -177,7 +184,11 @@ create (const char *file, unsigned initial_size)
   if (pagedir_get_page (thread_current ()->pagedir, file) == NULL)
     exit (-1);
 
-  return filesys_create (file, initial_size);
+  lock_acquire (&filesys_lock);
+  bool success = filesys_create (file, initial_size);
+  lock_release (&filesys_lock);
+
+  return success;
 }
 
 /* Deletes the file FILE. Returns true if successful, false otherwise.
@@ -188,7 +199,11 @@ remove (const char *file)
   if (pagedir_get_page (thread_current ()->pagedir, file) == NULL)
     exit (-1);
 
-  return filesys_remove (file);
+  lock_acquire (&filesys_lock);
+  bool success = filesys_remove (file);
+  lock_release (&filesys_lock);
+
+  return success;
 }
 
 /* Opens the file FILE and returns its file descriptor, or -1 if the file could
@@ -196,16 +211,22 @@ remove (const char *file)
 int
 open (const char *file)
 {
-  if (pagedir_get_page (thread_current ()->pagedir, file) == NULL)
+  struct thread *t = thread_current ();
+
+  if (pagedir_get_page (t->pagedir, file) == NULL)
     exit (-1);
 
-  struct thread *t = thread_current ();
-  lock_acquire (&t->filesys_lock);
+  lock_acquire (&t->open_files_lock);
+  lock_acquire (&filesys_lock);
   struct file *f = filesys_open (file);
+  lock_release (&filesys_lock);
   if (f == NULL)
-    return -1;
+    {
+      lock_release (&t->open_files_lock);
+      return -1;
+    }
   hash_insert (t->open_files, &f->elem);
-  lock_release (&t->filesys_lock);
+  lock_release (&t->open_files_lock);
 
   return f->fd;
 }
@@ -214,8 +235,22 @@ open (const char *file)
 int
 filesize (int fd)
 {
+  struct thread *t = thread_current ();
+
+  lock_acquire (&t->open_files_lock);
   struct file *f = lookup_fd (fd);
-  return file_length (f);
+  if (f == NULL)
+    {
+      lock_release (&t->open_files_lock);
+      exit (-1);
+    }
+
+  lock_acquire (&filesys_lock);
+  int len = file_length (f);
+  lock_release (&filesys_lock);
+  lock_release (&t->open_files_lock);
+
+  return len;
 }
 
 /* Reads size bytes from the file open as FD into BUFFER. Returns the number
@@ -223,25 +258,34 @@ filesize (int fd)
 int
 read (int fd, void *buffer, unsigned size)
 {
-  if (pagedir_get_page (thread_current ()->pagedir, buffer) == NULL ||
-      pagedir_get_page (thread_current ()->pagedir, (char *)buffer + size) == NULL)
+  struct thread *t = thread_current ();
+
+  if (pagedir_get_page (t->pagedir, buffer) == NULL ||
+      pagedir_get_page (t->pagedir, (char *)buffer + size) == NULL)
     exit (-1);
 
   if (fd == STDIN_FILENO)
     {
-      int i;
+      unsigned i;
       for (i = 0; i < size; i++)
         input_getc ();
       return i;
     }
 
+  lock_acquire (&t->open_files_lock);
   struct file *f = lookup_fd (fd);
+  if (f == NULL)
+    {
+      lock_release (&t->open_files_lock);
+      exit (-1);
+    }
 
-  lock_acquire (&thread_current ()->filesys_lock);
+  lock_acquire (&filesys_lock);
   int bytes_read = file_read (f, buffer, size);
-  lock_release (&thread_current ()->filesys_lock);
-  return bytes_read;
+  lock_release (&filesys_lock);
+  lock_release (&t->open_files_lock);
 
+  return bytes_read;
 }
 
 /* Writes SIZE bytes from BUFFER to the open file descriptor FD. Returns the
@@ -250,8 +294,10 @@ read (int fd, void *buffer, unsigned size)
 int
 write (int fd, const void *buffer, unsigned size)
 {
-  if (pagedir_get_page (thread_current ()->pagedir, buffer) == NULL ||
-      pagedir_get_page (thread_current ()->pagedir, (char *)buffer + size) == NULL)
+  struct thread *t = thread_current ();
+
+  if (pagedir_get_page (t->pagedir, buffer) == NULL ||
+      pagedir_get_page (t->pagedir, (char *)buffer + size) == NULL)
     exit (-1);
 
   if (fd == STDOUT_FILENO)
@@ -260,11 +306,18 @@ write (int fd, const void *buffer, unsigned size)
       return size;
     }
 
+  lock_acquire (&t->open_files_lock);
   struct file *f = lookup_fd (fd);
+  if (f == NULL)
+    {
+      lock_release (&t->open_files_lock);
+      exit (-1);
+    }
 
-  lock_acquire (&thread_current ()->filesys_lock);
+  lock_acquire (&filesys_lock);
   int bytes_written = file_write (f, buffer, size);
-  lock_release (&thread_current ()->filesys_lock);
+  lock_release (&filesys_lock);
+  lock_release (&t->open_files_lock);
 
   return bytes_written;
 }
@@ -275,8 +328,20 @@ write (int fd, const void *buffer, unsigned size)
 void
 seek (int fd, unsigned position)
 {
+  struct thread *t = thread_current ();
+
+  lock_acquire (&t->open_files_lock);
   struct file *f = lookup_fd (fd);
-  return file_seek (f, position);
+  if (f == NULL)
+    {
+      lock_release (&t->open_files_lock);
+      exit (-1);
+    }
+
+  lock_acquire (&filesys_lock);
+  file_seek (f, position);
+  lock_release (&filesys_lock);
+  lock_release (&t->open_files_lock);
 }
 
 /* Returns the position of the next byte to be read or written in open
@@ -284,8 +349,22 @@ seek (int fd, unsigned position)
 unsigned
 tell (int fd)
 {
+  struct thread *t = thread_current ();
+
+  lock_acquire (&t->open_files_lock);
   struct file *f = lookup_fd (fd);
-  return file_tell (f);
+  if (f == NULL)
+    {
+      lock_release (&t->open_files_lock);
+      exit (-1);
+    }
+
+  lock_acquire (&filesys_lock);
+  unsigned pos = file_tell (f);
+  lock_release (&filesys_lock);
+  lock_release (&t->open_files_lock);
+
+  return pos;
 }
 
 /* Closes file descriptor FD. Exiting or terminating a process implicitly
@@ -299,16 +378,22 @@ void close (int fd)
   if (fd == 0 || fd == 1 || fd == 2)
     exit (-1);
 
+  lock_acquire (&t->open_files_lock);
   struct file *f = lookup_fd (fd);
+  if (f == NULL)
+    {
+      lock_release (&t->open_files_lock);
+      exit (-1);
+    }
 
   /* If the lookup succeeded, delete the file from open_files. */
-  lock_acquire (&t->filesys_lock);
   struct file lookup;
   lookup.fd = fd;
   hash_delete (t->open_files, &lookup.elem);  
-  lock_release (&t->filesys_lock);
-
+  lock_acquire (&filesys_lock);
   file_close (f);
+  lock_release (&filesys_lock);
+  lock_release (&t->open_files_lock);
 }
 
 /* Verify that the passed syscall arguments are valid pointers.
@@ -329,23 +414,17 @@ check_args (void *first, void *second, void *third)
 }
 
 /* Given a file descriptor FD, returns its corresponding file. If no file is
-   found, kernel error with exit(-1). */
+   found, return NULL). */
 struct file *
 lookup_fd (int fd)
 {
   struct thread *t = thread_current ();
 
-  lock_acquire (&t->filesys_lock);
   struct file lookup;
   lookup.fd = fd;
   struct hash_elem *e = hash_find (t->open_files, &lookup.elem);
   if (e == NULL)
-    {
-      lock_release (&t->filesys_lock);
-      exit (-1);
-    }
-  lock_release (&t->filesys_lock);
-
+    return NULL;
   struct file *f = hash_entry (e, struct file, elem);
 
   return f;
