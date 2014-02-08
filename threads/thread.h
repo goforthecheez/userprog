@@ -112,6 +112,7 @@ struct thread
     unsigned magic;                     /* Detects stack overflow. */
   };
 
+#ifdef USERPROG
 /* Representation of thread's spawned child process. */
 struct child
   {
@@ -120,6 +121,7 @@ struct child
     int exit_status;            /* If process is done, its exit status. */
     struct hash_elem elem;      /* Hashtable element. */
   };
+#endif
 
 /* If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.

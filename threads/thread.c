@@ -315,14 +315,10 @@ thread_exit (void)
 
 #ifdef USERPROG
   process_exit ();
-#endif
 
   struct thread *t = thread_current ();
   hash_destroy (t->children, NULL);
   hash_destroy (t->open_files, NULL);
-
-
-
 
   struct child c;
   c.pid = thread_current ()->tid;
@@ -332,6 +328,7 @@ thread_exit (void)
   found_child->done = true;
   if (thread_current ()->my_executable != NULL)
     file_close (thread_current ()->my_executable);
+#endif
 
   /* Remove thread from all threads list, set our status to dying,
      and schedule another process.  That process will destroy us
