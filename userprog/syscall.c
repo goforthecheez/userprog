@@ -9,6 +9,7 @@
 #include "threads/synch.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
+#include "userprog/pagedir.h"
 #include "userprog/process.h"
 
 void halt (void);
@@ -38,12 +39,17 @@ syscall_init (void)
 static void
 syscall_handler (struct intr_frame *f UNUSED) 
 {
+  if (pagedir_get_page (thread_current ()->pagedir, f->esp) == NULL)
+    exit (-1);
+
   switch (*(int *)f->esp)
     {
       case SYS_HALT:
         shutdown_power_off ();
         break;
       case SYS_EXIT:
+        if (pagedir_get_page (thread_current ()->pagedir, (int *)f->esp + 1) == NULL)
+          exit (-1);
         exit (*((int *)f->esp + 1));
         break;
       case SYS_EXEC:
@@ -109,8 +115,8 @@ void exit (int status)
 pid_t exec (const char *cmd_line)
 {
   // TODO: check that file is within userspace
-  if (cmd_line == NULL || cmd_line >= PHYS_BASE)
-    return -1;
+  if (pagedir_get_page (thread_current ()->pagedir, cmd_line) == NULL)
+    exit (-1);
 
   struct thread *t = thread_current ();
 
@@ -118,6 +124,17 @@ pid_t exec (const char *cmd_line)
   pid_t pid = process_execute (cmd_line);
   cond_wait (&t->wait_cond, &t->wait_lock);
   thread_current ()->child_ready = false;
+  
+  struct child c;
+  c.tid = pid;
+  struct hash_elem *e = hash_find (thread_current ()->children, &c.elem);
+  struct child *found_child = hash_entry (e, struct child, elem);
+  if (found_child->exit_status == -1)
+    {
+      lock_release (&t->wait_lock);
+      return -1;
+    }
+
   lock_release (&t->wait_lock);
 
   return pid;
@@ -125,19 +142,26 @@ pid_t exec (const char *cmd_line)
 
 int wait (pid_t pid)
 {
-  return process_wait (pid);
+  int ret_val = process_wait (pid);
+
+  struct thread *t = thread_current ();
+  struct child c;
+  c.tid = pid;
+  hash_delete (t->children, &c.elem);
+
+  return ret_val;   //TODO WHAT IS THIS?
 }
 
 bool create (const char *file, unsigned initial_size)
 {
   // TODO: check that file is within usespace
-  if (file == NULL || file >= PHYS_BASE)
-    return false;
+  if (pagedir_get_page (thread_current ()->pagedir, file) == NULL)
+    exit (-1);
 
   bool success = filesys_create (file, initial_size);
 
   if (!success)
-    exit (-1);
+    return false;
 
   return success;
 }
@@ -145,8 +169,8 @@ bool create (const char *file, unsigned initial_size)
 bool remove (const char *file)
 {
   // TODO: check that file is within userspace
-  if (file == NULL || file >= PHYS_BASE)
-    return false;
+  if (pagedir_get_page (thread_current ()->pagedir, file) == NULL)
+    exit (-1);
   
   return filesys_remove (file);
 }
@@ -154,8 +178,8 @@ bool remove (const char *file)
 int open (const char *file)
 {
   // TODO: check that file is within userspace
-  if (file == NULL || file >= PHYS_BASE)
-    return -1;
+  if (pagedir_get_page (thread_current ()->pagedir, file) == NULL)
+    exit (-1);
 
   struct thread *t = thread_current ();
   lock_acquire (&t->filesys_lock);
@@ -163,9 +187,7 @@ int open (const char *file)
   lock_release (&t->filesys_lock);
 
   if (f == NULL)
-    {
-      return -1;
-    }
+    return -1;
 
   lock_acquire (&t->filesys_lock);
   hash_insert (t->open_files, &f->elem);
@@ -176,11 +198,19 @@ int open (const char *file)
 int filesize (int fd)
 {
   struct file *f = lookup_file (fd);
+  if (f == NULL)
+    {
+      exit (-1);
+    }
   return file_length (f);
 }
 
 int read (int fd, void *buffer, unsigned size)
 {
+  if (pagedir_get_page (thread_current ()->pagedir, buffer) == NULL ||
+      pagedir_get_page (thread_current ()->pagedir, (char *)buffer + size) == NULL)
+    exit (-1);
+
   struct file *f = lookup_file (fd);
 
   // TODO: prototypical example
@@ -190,11 +220,19 @@ int read (int fd, void *buffer, unsigned size)
 
   // TODO: handle reading from stdin
 
-  return file_read (f, buffer, size);
+  lock_acquire (&thread_current ()->filesys_lock);
+  int bytes_read = file_read (f, buffer, size);
+  lock_release (&thread_current ()->filesys_lock);
+  return bytes_read;
+
 }
 
 int write (int fd, const void *buffer, unsigned size)
 {
+  if (pagedir_get_page (thread_current ()->pagedir, buffer) == NULL ||
+      pagedir_get_page (thread_current ()->pagedir, (char *)buffer + size) == NULL)
+    exit (-1);
+
   if (fd == STDOUT_FILENO)
     {
       putbuf (buffer, size);
@@ -202,21 +240,33 @@ int write (int fd, const void *buffer, unsigned size)
     }
 
   struct file *f = lookup_file (fd);
-  if (f == NULL || buffer >= PHYS_BASE || buffer + size > PHYS_BASE)
+  if (f == NULL)
     exit (-1);
 
-  return file_write (f, buffer, size);
+  lock_acquire (&thread_current ()->filesys_lock);
+  int bytes_written = file_write (f, buffer, size);
+  lock_release (&thread_current ()->filesys_lock);
+
+  return bytes_written;
 }
 
 void seek (int fd, unsigned position)
 {
   struct file *f = lookup_file (fd);
+
+  if (f == NULL)
+    exit (-1);
+
   return file_seek (f, position);
 }
 
 unsigned tell (int fd)
 {
   struct file *f = lookup_file (fd);
+
+  if (f == NULL)
+    exit (-1);
+
   return file_tell (f);
 }
 
@@ -227,6 +277,12 @@ void close (int fd)
   if (f == NULL)
     exit (-1);
 
+  struct thread *t = thread_current ();
+  lock_acquire (&t->filesys_lock);
+  struct file lookup;
+  lookup.fd = fd;
+  hash_delete (t->open_files, &lookup.elem);  
+  lock_release (&t->filesys_lock);
   file_close (f);
 }
 
@@ -234,13 +290,17 @@ struct file *
 lookup_file (int fd)
 {
   struct thread *t = thread_current ();
+  lock_acquire (&t->filesys_lock);
+
   struct file lookup;
   lookup.fd = fd;
 
   struct hash_elem *e = hash_find (t->open_files, &lookup.elem);
+  lock_release (&t->filesys_lock);
   if (e == NULL)
     return NULL;
 
   struct file *f = hash_entry (e, struct file, elem);
+
   return f;
 }

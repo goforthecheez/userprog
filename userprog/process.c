@@ -35,7 +35,7 @@ process_execute (const char *cmd_line)
 {
   if (strlen (cmd_line) > CMD_LINE_MAX_CHARS)
     {
-      printf ("Please limit command lines to 408 characters or fewer.");
+      printf ("Please limit command lines to %d  characters or fewer", CMD_LINE_MAX_CHARS);
       return TID_ERROR;
     }
 
@@ -60,11 +60,13 @@ process_execute (const char *cmd_line)
 
   /* Create a new thread to execute FILE_NAME. */
   tid = thread_create (file_name, PRI_DEFAULT, start_process, cmd_line_copy);
+
   palloc_free_page (file_name_copy);
 
   if (tid == TID_ERROR)
     {
       palloc_free_page (cmd_line_copy);
+      return tid;
     }
 
   return tid;
@@ -97,7 +99,7 @@ start_process (void *cmd_line_)
 
   /* If load failed, quit. */
   palloc_free_page (cmd_line);
-  if (!success) 
+  if (!success)
     exit (-1);
 
   /* Start the user process by simulating a return from an
@@ -307,8 +309,11 @@ load (char *file_name, void (**eip) (void), void **esp)
   if (file == NULL) 
     {
       printf ("load: %s: open failed\n", argv[0]);
+      success = false;
       goto done; 
     }
+  file_deny_write (file);
+  t->my_executable = file;
 
   /* Read and verify executable header. */
   if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
@@ -393,7 +398,6 @@ load (char *file_name, void (**eip) (void), void **esp)
 
  done:
   /* We arrive here whether the load is successful or not. */
-  file_close (file);
   free (argv);
   return success;
 }

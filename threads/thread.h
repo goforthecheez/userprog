@@ -99,6 +99,7 @@ struct thread
     struct hash *open_files;
     struct lock filesys_lock;
     struct condition filesys_cond;
+    struct file *my_executable;
 
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
