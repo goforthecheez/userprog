@@ -62,22 +62,17 @@ static unsigned thread_ticks;   /* # of timer ticks since last yield. */
 bool thread_mlfqs;
 
 static void kernel_thread (thread_func *, void *aux);
-
 static void idle (void *aux UNUSED);
 static struct thread *running_thread (void);
 static struct thread *next_thread_to_run (void);
 static void init_thread (struct thread *, const char *name, int priority);
 static bool is_thread (struct thread *) UNUSED;
-static unsigned identity_hash_hash_func (const struct hash_elem *,
-                                         void *aux UNUSED);
-static bool identity_hash_less_func (const struct hash_elem *,
-                                     const struct hash_elem *,
-                                     void *aux UNUSED);
-static unsigned fd_hash_hash_func (const struct hash_elem *,
-                                         void *aux UNUSED);
-static bool fd_hash_less_func (const struct hash_elem *,
-                                     const struct hash_elem *,
-                                     void *aux UNUSED);
+static unsigned child_hash_hash_func (const struct hash_elem *, void * UNUSED);
+static bool child_hash_less_func (const struct hash_elem *, const struct hash_elem *,
+                                  void *aux UNUSED);
+static unsigned file_hash_hash_func (const struct hash_elem *, void *aux UNUSED);
+static bool file_hash_less_func (const struct hash_elem *, const struct hash_elem *,
+                                 void *aux UNUSED);
 static void *alloc_frame (struct thread *, size_t size);
 static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
@@ -125,12 +120,12 @@ thread_start (void)
   /* Start preemptive thread scheduling. */
   intr_enable ();
 
+  /* Now that interrupts have been enabled, initialize the
+     initial thread's children and open_files hashtables. */
   initial_thread->children = palloc_get_page (0);
-  hash_init (initial_thread->children, identity_hash_hash_func,
-             identity_hash_less_func, NULL);
   initial_thread->open_files = palloc_get_page (0);
-  hash_init (initial_thread->open_files, fd_hash_hash_func,
-             fd_hash_less_func, NULL);
+  hash_init (initial_thread->children, child_hash_hash_func, child_hash_less_func, NULL);
+  hash_init (initial_thread->open_files, file_hash_hash_func, file_hash_less_func, NULL);
 
   /* Wait for the idle thread to initialize idle_thread. */
   sema_down (&idle_started);
@@ -220,25 +215,21 @@ thread_create (const char *name, int priority,
   /* Add to run queue. */
   thread_unblock (t);
 
-  // TODO: mutex?
   if (strcmp (t->name, "idle") != 0)
     {
-      t->children = palloc_get_page (0);
-      hash_init (t->children, identity_hash_hash_func,
-                 identity_hash_less_func, NULL);
+      t->parent = thread_current ();
 
-      /* Register thread as a child. */
+      /* Initialize hashtables. */
+      t->children = palloc_get_page (0);
+      t->open_files = palloc_get_page (0); 
+      hash_init (t->children, child_hash_hash_func, child_hash_less_func, NULL);
+      hash_init (t->open_files, file_hash_hash_func, file_hash_less_func, NULL);
+
+      /* Register thread as its parent's child. */
       struct child *c = (struct child *)malloc (sizeof (struct child));
       c->tid = tid;
       c->done = false;
-
-      t->parent = thread_current ();
-
-      hash_insert (t->parent->children, &c->elem);  //TODO: throw error if result isn't NULL
-
-      t->open_files = palloc_get_page (0);
-      hash_init (t->open_files, fd_hash_hash_func,
-                 fd_hash_less_func, NULL);
+      hash_insert (t->parent->children, &c->elem);
     }
 
   return tid;
@@ -326,6 +317,13 @@ thread_exit (void)
   process_exit ();
 #endif
 
+  struct thread *t = thread_current ();
+  hash_destroy (t->children, NULL);
+  hash_destroy (t->open_files, NULL);
+
+
+
+
   struct child c;
   c.tid = thread_current ()->tid;
   struct hash_elem *e = hash_find (thread_current ()->parent->children,
@@ -339,8 +337,8 @@ thread_exit (void)
      and schedule another process.  That process will destroy us
      when it calls thread_schedule_tail(). */
   intr_disable ();
-  list_remove (&thread_current()->allelem);
-  thread_current ()->status = THREAD_DYING;
+  list_remove (&t->allelem);
+  t->status = THREAD_DYING;
   schedule ();
   NOT_REACHED ();
 }
@@ -496,14 +494,14 @@ is_thread (struct thread *t)
 }
 
 static unsigned
-identity_hash_hash_func (const struct hash_elem *e, void *aux UNUSED)
+child_hash_hash_func (const struct hash_elem *e, void *aux UNUSED)
 {
   struct child *c = hash_entry (e, struct child, elem);
   return c->tid;   //TODO: are parens around c->tid needed?
 }
 
 static bool
-identity_hash_less_func (const struct hash_elem *a, const struct hash_elem *b,
+child_hash_less_func (const struct hash_elem *a, const struct hash_elem *b,
                          void * aux UNUSED)
 {
   struct child *c = hash_entry (a, struct child, elem);
@@ -512,14 +510,14 @@ identity_hash_less_func (const struct hash_elem *a, const struct hash_elem *b,
 }
 
 static unsigned
-fd_hash_hash_func (const struct hash_elem *e, void *aux UNUSED)
+file_hash_hash_func (const struct hash_elem *e, void *aux UNUSED)
 {
   struct file *f = hash_entry (e, struct file, elem);
   return f->fd;
 }
 
 static bool
-fd_hash_less_func (const struct hash_elem *a, const struct hash_elem *b,
+file_hash_less_func (const struct hash_elem *a, const struct hash_elem *b,
                          void * aux UNUSED)
 {
   struct file *c = hash_entry (a, struct file, elem);
