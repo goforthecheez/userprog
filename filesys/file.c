@@ -3,6 +3,8 @@
 #include "filesys/inode.h"
 #include "threads/malloc.h"
 
+/* Global file descriptor counter. This begins counting at 3 because file descriptors
+   0, 1, and 2 are reserved fro stdin, stdout, and stderr, respectively. */
 int fd_counter = 3;
 
 /* Opens a file for the given INODE, of which it takes ownership,

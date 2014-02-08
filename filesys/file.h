@@ -8,11 +8,11 @@
 /* An open file. */
 struct file
   {
-    int fd;
+    int fd;                     /* File descriptor. */
     struct inode *inode;        /* File's inode. */
     off_t pos;                  /* Current position. */
     bool deny_write;            /* Has file_deny_write() been called? */
-    struct hash_elem elem;
+    struct hash_elem elem;      /* A hashtable element. */
   };
 
 /* Opening and closing files. */
