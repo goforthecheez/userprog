@@ -7,6 +7,7 @@
 #include "filesys/file.h"
 #include "lib/user/syscall.h"
 #include "threads/interrupt.h"
+#include "threads/malloc.h"
 #include "threads/synch.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
@@ -16,10 +17,6 @@
 #define ARG_ONE ((int *)f->esp + 1)
 #define ARG_TWO ((int *)f->esp + 2)
 #define ARG_THREE ((int *)f->esp + 3)
-
-/* File system lock. Currently, the file system does not provide internal
-   synchronization, so this will have to suffice. */
-struct lock filesys_lock;
 
 static void syscall_handler (struct intr_frame *);
 void halt (void);
@@ -167,10 +164,16 @@ wait (pid_t pid)
 {
   int exit_status = process_wait (pid);
 
+  if (exit_status == -1)
+    return -1;
+
   lock_acquire (&thread_current ()->child_lock);
   struct child c;
   c.pid = pid;
-  hash_delete (thread_current ()->children, &c.elem);
+  struct hash_elem *deleted_elem = hash_delete (thread_current ()->children,
+                                                &c.elem);
+  struct child *deleted_child = hash_entry (deleted_elem, struct child, elem);
+  free (deleted_child);
   lock_release (&thread_current ()->child_lock);
 
   return exit_status;

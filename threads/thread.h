@@ -104,7 +104,7 @@ struct thread
     bool child_ready;                   /* True if a child process has started. */
     struct condition child_cond;        /* Conditional variable for child_ready. */
     struct hash *open_files;            /* Files opened by this process. */
-    struct lock open_files_lock;        /* Lock protecting open_files hashtable. */
+    struct lock open_files_lock;        /* Lock protecting open_files hashtable. (not needed?) */
     struct file *my_executable;         /* Executable file this process is running. */
 #endif
 

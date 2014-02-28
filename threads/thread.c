@@ -14,6 +14,7 @@
 #include "threads/synch.h"
 #include "threads/vaddr.h"
 #ifdef USERPROG
+#include "userprog/syscall.h"
 #include "userprog/process.h"
 #endif
 
@@ -68,11 +69,13 @@ static struct thread *next_thread_to_run (void);
 static void init_thread (struct thread *, const char *name, int priority);
 static bool is_thread (struct thread *) UNUSED;
 static unsigned child_hash_hash_func (const struct hash_elem *, void * UNUSED);
-static bool child_hash_less_func (const struct hash_elem *, const struct hash_elem *,
-                                  void *aux UNUSED);
-static unsigned file_hash_hash_func (const struct hash_elem *, void *aux UNUSED);
-static bool file_hash_less_func (const struct hash_elem *, const struct hash_elem *,
-                                 void *aux UNUSED);
+static bool child_hash_less_func (const struct hash_elem *,
+                                  const struct hash_elem *, void * UNUSED);
+static unsigned file_hash_hash_func (const struct hash_elem *, void * UNUSED);
+static bool file_hash_less_func (const struct hash_elem *,
+                                 const struct hash_elem *, void * UNUSED);
+void hash_destroy_child (struct hash_elem *, void * UNUSED);
+void hash_destroy_file (struct hash_elem *, void * UNUSED);
 static void *alloc_frame (struct thread *, size_t size);
 static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
@@ -124,8 +127,10 @@ thread_start (void)
      initial thread's children and open_files hashtables. */
   initial_thread->children = palloc_get_page (0);
   initial_thread->open_files = palloc_get_page (0);
-  hash_init (initial_thread->children, child_hash_hash_func, child_hash_less_func, NULL);
-  hash_init (initial_thread->open_files, file_hash_hash_func, file_hash_less_func, NULL);
+  hash_init (initial_thread->children, child_hash_hash_func,
+             child_hash_less_func, NULL);
+  hash_init (initial_thread->open_files, file_hash_hash_func,
+             file_hash_less_func, NULL);
 
   /* Wait for the idle thread to initialize idle_thread. */
   sema_down (&idle_started);
@@ -222,8 +227,10 @@ thread_create (const char *name, int priority,
       /* Initialize hashtables. */
       t->children = palloc_get_page (0);
       t->open_files = palloc_get_page (0); 
-      hash_init (t->children, child_hash_hash_func, child_hash_less_func, NULL);
-      hash_init (t->open_files, file_hash_hash_func, file_hash_less_func, NULL);
+      hash_init (t->children, child_hash_hash_func,
+                 child_hash_less_func, NULL);
+      hash_init (t->open_files, file_hash_hash_func,
+                 file_hash_less_func, NULL);
 
       /* Register thread as its parent's child. */
       struct child *c = (struct child *)malloc (sizeof (struct child));
@@ -317,17 +324,19 @@ thread_exit (void)
   process_exit ();
 
   struct thread *t = thread_current ();
-  hash_destroy (t->children, NULL);
-  hash_destroy (t->open_files, NULL);
+  hash_destroy (t->children, hash_destroy_child);
+  hash_destroy (t->open_files, NULL);//hash_destroy_file);
+  palloc_free_page (t->children);
+  //palloc_free_page (t->open_files);
 
   struct child c;
-  c.pid = thread_current ()->tid;
-  struct hash_elem *e = hash_find (thread_current ()->parent->children,
-                                   &c.elem);
+  c.pid = t->tid;
+  struct hash_elem *e = hash_find (t->parent->children, &c.elem);
   struct child *found_child = hash_entry (e, struct child, elem);
   found_child->done = true;
-  if (thread_current ()->my_executable != NULL)
-    file_close (thread_current ()->my_executable);
+
+  if (t->my_executable != NULL)
+    file_close (t->my_executable);
 #endif
 
   /* Remove thread from all threads list, set our status to dying,
@@ -522,6 +531,21 @@ file_hash_less_func (const struct hash_elem *a, const struct hash_elem *b,
   return c->fd < d->fd;
 }
 
+void
+hash_destroy_child (struct hash_elem *e, void *aux UNUSED)
+{
+  struct child *c = hash_entry (e, struct child, elem);
+  free (c);
+}
+
+void
+hash_destroy_file (struct hash_elem *e, void *aux UNUSED)
+{
+  struct file *f = hash_entry (e, struct file, elem);
+  lock_acquire (&filesys_lock);
+  file_close (f);
+  lock_release (&filesys_lock);
+}
 
 /* Does basic initialization of T as a blocked thread named
    NAME. */

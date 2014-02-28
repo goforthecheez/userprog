@@ -36,7 +36,8 @@ process_execute (const char *cmd_line)
   /* If the command line length exceeds the maximum, politely warn the user. */
   if (strlen (cmd_line) > CMD_LINE_MAX_CHARS)
     {
-      printf ("Please limit command lines to %d  characters or fewer\n", CMD_LINE_MAX_CHARS);
+      printf ("Please limit command lines to %d  characters or fewer\n",
+              CMD_LINE_MAX_CHARS);
       return TID_ERROR;
     }
 
@@ -143,7 +144,8 @@ process_wait (tid_t child_tid UNUSED)
   return exit_status;
 }
 
-/* Print the process termination message and free the current process's resources. */
+/* Print the process termination message and free the current process's
+   resources. */
 void
 process_exit (void)
 {
@@ -153,7 +155,8 @@ process_exit (void)
   struct thread *t = thread_current ();
   struct child c;
   c.pid = t->tid;
-  struct child *found_child = hash_entry (hash_find (t->parent->children, &c.elem),
+  struct child *found_child = hash_entry (hash_find (t->parent->children,
+                                                     &c.elem),
                                           struct child, elem);
   int status = found_child->exit_status;
   printf ("%s: exit(%d)\n", t->name, status);
