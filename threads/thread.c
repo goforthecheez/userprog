@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "filesys/file.h"
+#include "filesys/filesys.h"
 #include "threads/flags.h"
 #include "threads/interrupt.h"
 #include "threads/intr-stubs.h"
@@ -14,7 +15,6 @@
 #include "threads/synch.h"
 #include "threads/vaddr.h"
 #ifdef USERPROG
-#include "userprog/syscall.h"
 #include "userprog/process.h"
 #endif
 
@@ -323,18 +323,19 @@ thread_exit (void)
 #ifdef USERPROG
   process_exit ();
 
+  /* Indicate to the parent that the current process is done. */
   struct thread *t = thread_current ();
-  hash_destroy (t->children, hash_destroy_child);
-  hash_destroy (t->open_files, hash_destroy_file);
-  free (t->children);
-  free (t->open_files);
-
   struct child c;
   c.pid = t->tid;
   struct hash_elem *e = hash_find (t->parent->children, &c.elem);
   struct child *found_child = hash_entry (e, struct child, elem);
   found_child->done = true;
 
+  /* Free the current thread. */
+  hash_destroy (t->children, hash_destroy_child);
+  hash_destroy (t->open_files, hash_destroy_file);
+  free (t->children);
+  free (t->open_files);
   if (t->my_executable != NULL)
     file_close (t->my_executable);
 #endif
@@ -567,7 +568,6 @@ init_thread (struct thread *t, const char *name, int priority)
   lock_init (&t->child_lock);
   t->child_ready = false;
   cond_init (&t->child_cond);
-  lock_init (&t->open_files_lock);
 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
